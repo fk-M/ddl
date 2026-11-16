@@ -187,13 +187,11 @@ export function Sidebar({
   const orderedNav = useMemo(() => sortByNavOrder(NAV_ITEMS, navOrder), [navOrder]);
   const orderedTools = useMemo(() => sortByNavOrder(TOOL_ITEMS, navOrder), [navOrder]);
 
-  // 移动端抽屉手势：左边缘右滑打开、抽屉内左滑关闭。
-  // 触摸端必须走 touch 事件：浏览器一旦把滑动判定为页面滚动就会抛 pointercancel，
+  // 移动端抽屉手势：屏幕任意位置右滑打开、抽屉内左滑关闭。
+  // 触摸端必须走 touch 事件：浏览器一旦把滑动判定成页面滚动就会抛 pointercancel，
   // 只监听 pointer 的手势在真机上会被当场掐断（桌面用鼠标测不出来，所以别轻信模拟测试）。
   useEffect(() => {
     const isPhone = () => window.innerWidth < 768;
-    // 起手区要宽于 Android 手势返回的感应区（约 24dp），否则边缘滑动会被系统吃掉
-    const EDGE_ZONE = 40;
     const OPEN_THRESHOLD = 56;
     const CLOSE_RATIO = 0.3;
     const SLOP = 8;
@@ -203,11 +201,31 @@ export function Sidebar({
 
     const widthOf = () => asideRef.current?.offsetWidth ?? 288;
 
+    /** 起点是否落在横向可滚动容器里（看板、设置页签条等）：那里的左右滑归它们自己 */
+    function inHorizontalScroller(start: Element): boolean {
+      let node: Element | null = start;
+      while (node && node !== document.body) {
+        const overflowX = getComputedStyle(node).overflowX;
+        if (
+          (overflowX === 'auto' || overflowX === 'scroll') &&
+          node.scrollWidth - node.clientWidth > 8
+        ) {
+          return true;
+        }
+        node = node.parentElement;
+      }
+      return false;
+    }
+
     function begin(x: number, y: number, target: EventTarget | null) {
       tracking = null;
       if (!isPhone()) return;
       if (!openRef.current) {
-        if (x > EDGE_ZONE) return;
+        if (!(target instanceof Element)) return;
+        // 横向容器与日历（左右滑动切月）先让位，剩下的区域一律可以右滑开抽屉
+        if (inHorizontalScroller(target) || target.closest('[data-hswipe="calendar"]')) return;
+        // 有浮层/详情面板开着时不开抽屉，否则会叠在面板背后
+        if (document.querySelector('[data-sheet]')) return;
         tracking = { startX: x, startY: y, mode: 'open', claimed: false };
         return;
       }
@@ -216,7 +234,7 @@ export function Sidebar({
       tracking = { startX: x, startY: y, mode: 'close', claimed: false };
     }
 
-    /** 返回 true 表示这次移动已被手势接管，调用方应 preventDefault 阻止页面滚动 */
+    /** 返回 true 表示这次移动已被手势接管（调用方据此决定是否阻止滚动） */
     function move(x: number, y: number): boolean {
       if (!tracking) return false;
       const dx = x - tracking.startX;
@@ -257,12 +275,11 @@ export function Sidebar({
       setSwipeX(null);
     };
 
-    // 只有真的进入横向手势后才挂非被动 touchmove：既能在浏览器开始滚动前
-    // preventDefault 接管，又不会让全局非被动监听拖慢平时的滚动。
+    // 全屏起手，如果挂非被动 touchmove，每次触摸都要等我们处理完才敢滚动。
+    // 打开抽屉本身不需要阻止滚动（右滑方向页面本来也不许横向滚），所以一律用被动监听。
     const onTouchMove = (event: TouchEvent) => {
       const touch = event.touches[0];
-      if (!touch) return;
-      if (move(touch.clientX, touch.clientY) && event.cancelable) event.preventDefault();
+      if (touch) move(touch.clientX, touch.clientY);
     };
 
     const detachTouch = () => {
@@ -287,7 +304,7 @@ export function Sidebar({
       if (!touch) return;
       begin(touch.clientX, touch.clientY, event.target);
       if (!tracking) return;
-      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchmove', onTouchMove, { passive: true });
       document.addEventListener('touchend', onTouchEnd);
       document.addEventListener('touchcancel', detachTouch);
     };
@@ -312,7 +329,8 @@ export function Sidebar({
     document.addEventListener('pointerdown', onPointerDown, { passive: true, capture: true });
     document.addEventListener('pointermove', onPointerMove, { passive: true });
     document.addEventListener('pointerup', onPointerUp);
-    document.addEventListener('pointercancel', reset);
+    // 注意：不能监听 pointercancel —— 触摸滚动一开始浏览器就会抛它（触摸与 pointer 并行派发），
+    // 一 reset 刚建立的触摸手势就废了。鼠标取消极少见，交给下一次 pointerdown 覆盖即可。
     // 四象限/看板开始拖拽时让位，否则横向拖动会同时推开抽屉
     window.addEventListener('ddl:dragstart', reset);
     return () => {
@@ -321,7 +339,6 @@ export function Sidebar({
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('pointermove', onPointerMove);
       document.removeEventListener('pointerup', onPointerUp);
-      document.removeEventListener('pointercancel', reset);
       window.removeEventListener('ddl:dragstart', reset);
     };
   }, []);

@@ -174,6 +174,8 @@ export function CalendarView({ lists, onOpen, showLunar = true }: Props) {
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
       // 只接管横向滑动，纵向仍交给页面滚动
+      // data-hswipe：告知侧边栏抽屉手势回避这块区域（左右滑动在这里是切月/切周）
+      data-hswipe="calendar"
       className="touch-pan-y"
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

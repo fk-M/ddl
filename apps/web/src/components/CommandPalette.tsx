@@ -88,6 +88,7 @@ export function CommandPalette({ open, onClose, lists, smartLists, onNavigate, o
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 px-4 pt-24"
+      data-sheet="1"
       onClick={onClose}
     >
       <div

@@ -235,7 +235,7 @@ export function TaskDetailPanel({ task, lists, saving, onClose, onSave, onDelete
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <div className="fixed inset-0 z-40 flex justify-end" data-sheet="1">
       <button
         type="button"
         aria-label="关闭详情"

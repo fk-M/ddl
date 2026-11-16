@@ -158,6 +158,7 @@ export function Modal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 sm:items-start sm:px-4 sm:pt-24"
+      data-sheet="1"
       onClick={onClose}
     >
       <div
