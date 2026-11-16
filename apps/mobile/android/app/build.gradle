@@ -16,16 +16,20 @@ if (keystorePropertiesFile.exists()) {
 def envKeystorePath = System.getenv('DDL_KEYSTORE_PATH')
 def hasEnvSigning = envKeystorePath != null && !envKeystorePath.trim().isEmpty() && new File(envKeystorePath).exists()
 
-def appVersionName = System.getenv('DDL_VERSION_NAME') ?: '1.0.0'
+def appVersionName = System.getenv('DDL_VERSION_NAME') ?: '0.1.0'
 
-// versionCode 必须单调递增，否则系统拒绝覆盖安装。
-// 显式传入（CI 用 run number）优先；本地构建用「分钟级时间戳」兜底。
-def appVersionCode = 1
-def envVersionCode = System.getenv('DDL_VERSION_CODE')
-if (envVersionCode != null && envVersionCode ==~ /\d+/) {
-    appVersionCode = envVersionCode.toInteger()
-} else {
-    appVersionCode = (System.currentTimeMillis().intdiv(60000L)) as int
+// versionCode 由语义化版本推导，CI 与本地构建结果一致且单调递增：
+//   100000000 + major*10000 + minor*100 + patch
+// 1) 上限 2100000000，major 可用到 20 万，够用；
+// 2) 早期版本用的是「分钟级时间戳」(≈2.99e7)，1e8 起步能直接覆盖安装，不会判成降级；
+// 3) 同一版本重复构建得到相同 code（可以重装），要重新发布时请提 patch 号。
+def versionMatcher = (appVersionName =~ /^v?(\d+)\.(\d+)\.(\d+)/)
+def appVersionCode = 100000000
+if (versionMatcher.find()) {
+    def vMajor = versionMatcher.group(1) as int
+    def vMinor = versionMatcher.group(2) as int
+    def vPatch = versionMatcher.group(3) as int
+    appVersionCode = 100000000 + vMajor * 10000 + vMinor * 100 + vPatch
 }
 
 android {

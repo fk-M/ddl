@@ -38,7 +38,8 @@ jobs:
           else
             echo "DDL_VERSION_NAME=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
           fi
-          echo "DDL_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          # 不注入 DDL_VERSION_CODE：versionCode 由 build.gradle 从版本号推导，
+          # 保证 CI 与本地构建一致（run number 从 1 起，会比手机上已装的旧版小 → 被判降级）
 
       - name: 安装依赖
         run: npm ci
