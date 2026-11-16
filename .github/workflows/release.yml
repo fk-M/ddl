@@ -120,6 +120,15 @@ jobs:
       - name: 准备资源（前端 + 服务端单文件 + 运行时依赖）
         run: npm run prepare:res -w @ddl/desktop
 
+      # electron-builder 的 installOrRebuild() 发现 apps/desktop/node_modules 不存在时，
+      # 会改成跑 npm install --production，把根 node_modules 里的开发依赖（含 app-builder.exe）一并剪掉，
+      # 随后报 spawn ...app-builder.exe ENOENT。放一个占位目录让它走 rebuild 分支。
+      - name: 占位 node_modules（防止 electron-builder 剪断依赖）
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/node_modules
+          touch apps/desktop/node_modules/.keep
+
       - name: 打包 Windows 安装包
         working-directory: apps/desktop
         shell: bash
