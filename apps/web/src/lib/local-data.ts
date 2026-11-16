@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   Attachment,
   BatchTaskInput,
   CreateListGroupPayload,
@@ -29,6 +30,7 @@ import {
   type LocalRow,
   type SyncStore,
 } from './local-db';
+import { AppSettingsSchema } from '@ddl/shared';
 import { scheduleSync } from './sync-engine';
 
 /** 手机端「本地优先」数据源：所有核心读写落在 IndexedDB，离线完整可用 */
@@ -766,4 +768,67 @@ export async function localOpenAttachment(id: string): Promise<void> {
   const canShare = await Share.canShare();
   if (!canShare.value) throw new Error('当前设备没有可用于打开该附件的应用');
   await Share.share({ title: row.name, text: row.name, url: written.uri, dialogTitle: '打开附件' });
+}
+
+/* ============================== 设置（本地优先） ============================== */
+
+const SETTINGS_META_KEY = 'app-settings';
+
+/**
+ * 手机端设置存在 IndexedDB 的 meta store 里。
+ * 之前设置只走服务端接口，手机离线时所有开关都是「点了没反应」——
+ * 主题、提醒、导航顺序这些本来就跟设备相关，落本地更合理。
+ * 设置不参与同步协议，各设备各自保留。
+ */
+export async function localGetSettings(): Promise<AppSettings> {
+  const stored = await getMeta<Partial<AppSettings>>(SETTINGS_META_KEY);
+  const merged = { ...AppSettingsSchema.parse({}) } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(stored ?? {})) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged as AppSettings;
+}
+
+export async function localPatchSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const current = await localGetSettings();
+  const next = AppSettingsSchema.parse({ ...current, ...patch });
+  await setMeta(SETTINGS_META_KEY, next);
+  return next;
+}
+
+export async function localResetSettings(): Promise<AppSettings> {
+  const defaults = AppSettingsSchema.parse({});
+  await setMeta(SETTINGS_META_KEY, defaults);
+  return defaults;
+}
+
+/* ============================== 本地导出 ============================== */
+
+/** 手机端导出 JSON 备份：结构与服务端 /api/backup/export 对齐，可直接在桌面端导入 */
+export async function localExportJson(): Promise<string> {
+  const [listGroups, lists, tags, tasks, settings] = await Promise.all([
+    getAll('listGroups'),
+    getAll('lists'),
+    getAll('tags'),
+    getAll('tasks'),
+    localGetSettings(),
+  ]);
+  const payload = {
+    app: 'ddl',
+    exportedAt: new Date().toISOString(),
+    source: 'android-local-first',
+    listGroups,
+    lists,
+    tags,
+    tasks: tasks.filter((task) => !(task as { deletedAt?: string | null }).deletedAt),
+    templates: [],
+    habits: [],
+    habitLogs: [],
+    focusSessions: [],
+    anniversaries: [],
+    smartLists: [],
+    sources: [],
+    settings: Object.entries(settings).map(([key, value]) => ({ key, value })),
+  };
+  return JSON.stringify(payload, null, 2);
 }

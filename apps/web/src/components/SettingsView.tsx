@@ -28,6 +28,7 @@ import { getSyncStatus, subscribeSync, syncNow, type SyncStatus } from '../lib/s
 import { COMPLETION_SOUNDS, NOISE_KINDS, REMIND_SOUNDS, playCompletionSound, playRemindSound, type NoiseKind } from '../lib/sound';
 import { ACCENT_PRESETS, ICON_PACKS } from '../lib/theme';
 import { NavOrderCard } from './NavOrderCard';
+import { NotifyCard } from './NotifyCard';
 import { Button, Card, ErrorBar, Field, SectionTitle, Toggle, inputClass, selectClass } from './ui';
 import { UpdateCard } from './UpdateCard';
 
@@ -71,6 +72,8 @@ export function SettingsView({ settings, lists }: Props) {
   const [importText, setImportText] = useState('');
   const [importResult, setImportResult] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState('');
   const [calUrl, setCalUrl] = useState('');
   const [calName, setCalName] = useState('');
   const [serverUrl, setServerUrlInput] = useState(getServerUrl());
@@ -141,6 +144,22 @@ export function SettingsView({ settings, lists }: Props) {
       setImportResult(error instanceof Error ? error.message : '导入失败');
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function doExportJson() {
+    setExporting(true);
+    setExportMessage('');
+    try {
+      const text = await api.exportLocalJson();
+      const stamp = new Date().toISOString().slice(0, 10);
+      const { saveTextFile } = await import('../lib/export-file');
+      await saveTextFile(`ddl-backup-${stamp}.json`, text);
+      setExportMessage('备份已生成，可在电脑端「设置 → 数据 → 导入」里恢复');
+    } catch (error) {
+      setExportMessage(error instanceof Error ? error.message : '导出失败');
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -319,6 +338,8 @@ export function SettingsView({ settings, lists }: Props) {
                 onChange={(next) => patch({ completionSoundEnabled: next })}
               />
             </Card>
+
+            <NotifyCard />
 
             <Card id="settings-focus">
               <SectionTitle>番茄专注</SectionTitle>
@@ -508,8 +529,14 @@ export function SettingsView({ settings, lists }: Props) {
         )}
 
         {active === 'calendar' && (
-          <Card id="settings-calendar">
-            <SectionTitle>日历订阅（.ics）</SectionTitle>
+            <Card id="settings-calendar">
+              <SectionTitle>日历订阅（.ics）</SectionTitle>
+              {isLocalFirst() && (
+                <p className="mb-3 rounded-lg bg-neutral-50 px-3 py-2 text-[11.5px] leading-relaxed text-neutral-500">
+                  订阅的拉取与解析都在电脑端服务里完成。手机要先和电脑连同一网络、并在「服务端连接」里填好地址，
+                  才能添加订阅；已有日程会随同步一起下来。
+                </p>
+              )}
             <div className="flex gap-2">
               <input
                 value={calName}
@@ -589,16 +616,23 @@ export function SettingsView({ settings, lists }: Props) {
             <Card id="settings-data">
               <SectionTitle>数据</SectionTitle>
               <div className="flex flex-wrap gap-2">
-                {(['json', 'csv', 'ics'] as const).map((format) => (
-                  <a
-                    key={format}
-                    href={api.exportUrl(format)}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-[13px] text-neutral-700 hover:bg-neutral-50"
-                  >
+                {isLocalFirst() ? (
+                  <Button onClick={doExportJson} disabled={exporting}>
                     <Download className="size-3.5" />
-                    导出 {format.toUpperCase()}
-                  </a>
-                ))}
+                    {exporting ? '生成中…' : '导出 JSON 备份'}
+                  </Button>
+                ) : (
+                  (['json', 'csv', 'ics'] as const).map((format) => (
+                    <a
+                      key={format}
+                      href={api.exportUrl(format)}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-[13px] text-neutral-700 hover:bg-neutral-50"
+                    >
+                      <Download className="size-3.5" />
+                      导出 {format.toUpperCase()}
+                    </a>
+                  ))
+                )}
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -609,52 +643,72 @@ export function SettingsView({ settings, lists }: Props) {
                   清空垃圾桶
                 </Button>
               </div>
+              {isLocalFirst() && (
+                <p className="mt-2 text-[11.5px] leading-relaxed text-neutral-400">
+                  手机端导出的是完整 JSON 备份（含清单、任务、标签与设置），可直接在电脑端导入；
+                  CSV / ICS 需要在电脑端导出。{exportMessage && ` ${exportMessage}`}
+                </p>
+              )}
 
               <div className="mt-4 rounded-lg border border-neutral-200/80 p-3">
                 <p className="mb-2 text-[12px] font-medium text-neutral-700">导入</p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={importFormat}
-                    onChange={(event) => setImportFormat(event.target.value as 'json' | 'csv' | 'ics')}
-                    className="h-8 rounded-lg border border-neutral-200 bg-white px-2 text-[12px] outline-none"
-                  >
-                    <option value="json">DDL 备份 JSON</option>
-                    <option value="csv">CSV（title,list,dueAt,tags…）</option>
-                    <option value="ics">iCalendar .ics</option>
-                  </select>
-                  <Button size="sm" onClick={() => fileRef.current?.click()}>
-                    <Upload className="size-3.5" />
-                    选择文件
-                  </Button>
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept=".json,.csv,.ics,text/calendar,application/json,text/csv"
-                    className="hidden"
-                    onChange={async (event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      setImportText(await file.text());
-                      event.target.value = '';
-                    }}
-                  />
-                  {importText && (
-                    <span className="text-[11.5px] text-neutral-500">已读取 {importText.length} 字符</span>
-                  )}
-                </div>
-                <textarea
-                  value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
-                  placeholder="也可以直接粘贴内容"
-                  rows={3}
-                  className="mt-2 w-full rounded-lg border border-neutral-200 bg-white p-2 text-[12px] outline-none focus:border-neutral-400"
-                />
-                <div className="mt-2 flex items-center gap-2">
-                  <Button variant="primary" size="sm" disabled={!importText.trim() || importing} onClick={doImport}>
-                    {importing ? '导入中…' : '开始导入'}
-                  </Button>
-                  {importResult && <span className="text-[11.5px] text-neutral-600">{importResult}</span>}
-                </div>
+                {isLocalFirst() ? (
+                  <p className="text-[12px] leading-relaxed text-neutral-500">
+                    手机端暂不支持导入（解析与落库都在电脑端服务里）。
+                    请把备份文件拿到电脑上，用「设置 → 数据 → 导入」恢复。
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={importFormat}
+                        onChange={(event) => setImportFormat(event.target.value as 'json' | 'csv' | 'ics')}
+                        className="h-8 rounded-lg border border-neutral-200 bg-white px-2 text-[12px] outline-none"
+                      >
+                        <option value="json">DDL 备份 JSON</option>
+                        <option value="csv">CSV（title,list,dueAt,tags…）</option>
+                        <option value="ics">iCalendar .ics</option>
+                      </select>
+                      <Button size="sm" onClick={() => fileRef.current?.click()}>
+                        <Upload className="size-3.5" />
+                        选择文件
+                      </Button>
+                      <input
+                        ref={fileRef}
+                        type="file"
+                        accept=".json,.csv,.ics,text/calendar,application/json,text/csv"
+                        className="hidden"
+                        onChange={async (event) => {
+                          const file = event.target.files?.[0];
+                          if (!file) return;
+                          setImportText(await file.text());
+                          event.target.value = '';
+                        }}
+                      />
+                      {importText && (
+                        <span className="text-[11.5px] text-neutral-500">已读取 {importText.length} 字符</span>
+                      )}
+                    </div>
+                    <textarea
+                      value={importText}
+                      onChange={(event) => setImportText(event.target.value)}
+                      placeholder="也可以直接粘贴内容"
+                      rows={3}
+                      className="mt-2 w-full rounded-lg border border-neutral-200 bg-white p-2 text-[12px] outline-none focus:border-neutral-400"
+                    />
+                    <div className="mt-2 flex items-center gap-2">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={!importText.trim() || importing}
+                        onClick={doImport}
+                      >
+                        {importing ? '导入中…' : '开始导入'}
+                      </Button>
+                      {importResult && <span className="text-[11.5px] text-neutral-600">{importResult}</span>}
+                    </div>
+                  </>
+                )}
               </div>
             </Card>
 
@@ -798,7 +852,7 @@ export function SettingsView({ settings, lists }: Props) {
               <SectionTitle>关于</SectionTitle>
               <p className="text-[12px] leading-relaxed text-neutral-500">
                 {isLocalFirst()
-                  ? '手机端核心数据存在本机 IndexedDB，离线完整可用；与电脑连同一网络时自动双向同步。习惯、专注、纪念日、信息源、附件与设置需联网时可用。'
+                  ? '手机端核心数据存在本机 IndexedDB，离线完整可用；主题、提醒、导航顺序等设置也保存在本机。习惯、专注、纪念日、信息源与附件需联网时可用。'
                   : '数据保存在本机 PGlite 数据库，附件存于 apps/server/data/attachments。'}
                 团队协作、第三方日历 OAuth、微信/邮件推送需要云账号，暂未接入；.ics 订阅已可替代日历只读同步。
               </p>

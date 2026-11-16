@@ -11,6 +11,7 @@ import {
   useToggleTask,
 } from '../hooks/useDdl';
 import { notificationPermission, requestNotificationPermission } from '../hooks/useReminders';
+import { isNativeNotify, requestNotifyPermission } from '../lib/notify';
 import { api } from '../lib/api';
 import { fromLocalInputValue, toLocalInputValue } from '../lib/datetime';
 import {
@@ -431,16 +432,21 @@ export function TaskDetailPanel({ task, lists, saving, onClose, onSave, onDelete
               )}
             </div>
 
-            {permission === 'default' && (
+            {(permission === 'default' || (permission === 'unsupported' && isNativeNotify())) && (
               <button
                 type="button"
                 onClick={async () => {
+                  if (isNativeNotify()) {
+                    const result = await requestNotifyPermission();
+                    setPermission(result.granted ? 'granted' : 'denied');
+                    return;
+                  }
                   const result = await requestNotificationPermission();
                   setPermission(result);
                 }}
                 className="mt-1.5 text-[11.5px] text-blue-600 hover:underline"
               >
-                开启桌面通知，到点弹出系统提醒
+                开启系统通知，到点弹提醒
               </button>
             )}
             {permission === 'denied' && (

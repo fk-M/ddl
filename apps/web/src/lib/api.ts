@@ -382,10 +382,18 @@ export const api = {
     request<CalendarEvent[]>(`/api/calendars/events${toQuery({ from, to })}`),
 
   /* ------------------------------ 设置 ------------------------------ */
-  settings: () => request<AppSettings>('/api/settings'),
+  settings: () =>
+    isLocalFirst() ? local.localGetSettings() : request<AppSettings>('/api/settings'),
   updateSettings: (patch: Partial<AppSettings>) =>
-    request<AppSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
-  resetSettings: () => request<AppSettings>('/api/settings/reset', { method: 'POST' }),
+    isLocalFirst()
+      ? local.localPatchSettings(patch)
+      : request<AppSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+  resetSettings: () =>
+    isLocalFirst()
+      ? local.localResetSettings()
+      : request<AppSettings>('/api/settings/reset', { method: 'POST' }),
+  /** 手机端本地导出（桌面端走 exportUrl 下载） */
+  exportLocalJson: () => local.localExportJson(),
 
   /* ------------------------------ 附件 ------------------------------ */
   uploadAttachment: (taskId: string, name: string, mime: string, dataBase64: string) =>

@@ -35,6 +35,16 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- 到点提醒：AlarmManager 触发后由它弹系统通知 -->
+        <receiver
+            android:name=".ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- Permissions -->
@@ -42,4 +52,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 应用内自更新：下载新 APK 后拉起系统安装器（Android 8+ 还需用户手动允许「安装未知应用」） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 系统通知（Android 13+ 需运行时授权） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 定时精确提醒；系统不允许时降级为 setAndAllowWhileIdle（可能延迟几分钟） -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 重启后恢复已排期的提醒 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>
