@@ -56,6 +56,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 定时精确提醒；系统不允许时降级为 setAndAllowWhileIdle（可能延迟几分钟） -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 提醒类应用的核心能力就是到点响，声明后系统默认授予精确闹钟（否则 Android 13+ 默认拒绝） -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <!-- 重启后恢复已排期的提醒 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>
