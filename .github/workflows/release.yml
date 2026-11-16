@@ -138,18 +138,14 @@ jobs:
             --config.publish.owner=${{ github.repository_owner }} \
             --config.publish.repo=${{ github.event.repository.name }}
 
-      - name: 重命名产物
-        shell: bash
-        run: |
-          mkdir -p release-artifacts
-          cp apps/desktop/dist-win/DDL-*-x64.exe "release-artifacts/DDL-${DDL_VERSION_NAME}-windows-setup.exe"
-
       - uses: softprops/action-gh-release@v2
         with:
-          # latest.yml 与 blockmap 是 electron-updater 的增量更新依据，必须一起上传
+          # latest.yml 与 blockmap 是 electron-updater 的增量更新依据，必须一起上传。
+          # 安装包不能改名：electron-updater 按 latest.yml 里记录的 path（DDL-<ver>-x64.exe）
+          # 去 Release 里找文件，改了名就会 404。
           files: |
-            release-artifacts/DDL-*-windows-setup.exe
+            apps/desktop/dist-win/DDL-*-x64.exe
             apps/desktop/dist-win/latest.yml
             apps/desktop/dist-win/*.blockmap
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
