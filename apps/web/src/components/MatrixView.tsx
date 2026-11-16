@@ -2,11 +2,15 @@ import type { Task, TaskList } from '@ddl/shared';
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
+  pointerWithin,
+  rectIntersection,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
@@ -61,8 +65,10 @@ function FlagChip({
   return (
     <button
       type="button"
-      // 卡片整体可拖动，按钮要拦住 pointerdown，否则长按会误触发拖拽
+      // 卡片整体可拖动，按钮要拦住起手事件，否则长按会误触发拖拽
+      // （触屏只认 touchstart，光拦 pointerdown 在手机上没用）
       onPointerDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
       onClick={onClick}
       className={clsx(
         'rounded px-1 py-[1px] text-[9.5px] transition-colors md:px-1.5 md:text-[10.5px]',
@@ -102,6 +108,7 @@ function MatrixCard({
       <button
         type="button"
         onPointerDown={(event) => event.stopPropagation()}
+        onTouchStart={(event) => event.stopPropagation()}
         onClick={onToggle}
         disabled={busy}
         aria-label="标记为已完成"
@@ -155,9 +162,11 @@ function MatrixCard({
       <button
         type="button"
         onPointerDown={(event) => event.stopPropagation()}
+        onTouchStart={(event) => event.stopPropagation()}
         onClick={onDelete}
         aria-label="删除任务"
-        className="mt-0.5 hidden rounded p-1 text-neutral-300 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-neutral-200/70 hover:text-red-600 md:block"
+        // 手机上没有 hover，删除按钮必须常显，否则四象限里删不掉任务
+        className="mt-0.5 shrink-0 rounded p-1 text-neutral-300 transition-opacity hover:bg-neutral-200/70 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100"
       >
         <Trash2 className="size-3" />
       </button>
@@ -263,12 +272,23 @@ export function MatrixView({
   const listNameMap = new Map(lists.map((list) => [list.id, list.name]));
   const pending = tasks.filter((task) => task.status === 'pending');
 
-  // delay 激活：快速点击/滑动仍然能滚动列表，按住才进入拖拽
+  // 手机必须走 TouchSensor：PointerSensor 在触摸下会被浏览器的滚动判定打断（pointercancel），
+  // 表现就是「长按半天拖不动」。桌面用 MouseSensor，按下即拖不需要等待。
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { delay: 160, tolerance: 8 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
   );
 
+  // 手指落点优先：落在哪个象限就归哪个；落在间隙时再退回矩形相交
+  const collisionDetection: CollisionDetection = (args) => {
+    const hits = pointerWithin(args);
+    return hits.length > 0 ? hits : rectIntersection(args);
+  };
+
   function handleDragStart(event: DragStartEvent) {
+    // 通知侧边栏手势让位：真机长按拖拽时手指常有横向位移，
+    // 不通知就会一边拖卡片一边把抽屉推出来
+    window.dispatchEvent(new CustomEvent('ddl:dragstart'));
     const task = pending.find((item) => item.id === event.active.id);
     setActiveTask(task ?? null);
   }
@@ -310,11 +330,12 @@ export function MatrixView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <p className="mb-2 shrink-0 text-[11.5px] text-neutral-400 md:mb-3 md:text-[12px]">
-        长按任务拖到别的象限即可调整；也可以直接点任务上的「重要 / 紧急」标签。
+        长按任务拖到别的象限即可调整（手机按住约 0.2 秒）；也可以直接点任务上的「重要 / 紧急」标签。
       </p>
 
       <DndContext
         sensors={sensors}
+        collisionDetection={collisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveTask(null)}
@@ -352,7 +373,8 @@ export function MatrixView({
 
         <DragOverlay dropAnimation={null}>
           {activeTask ? (
-            <div className="w-[220px] rounded-lg border border-neutral-200 bg-white shadow-xl md:w-[300px]">
+            // 手机上单个象限只有半屏宽，浮层必须跟着视口收缩，否则会横着溢出
+            <div className="w-[min(220px,68vw)] rotate-1 rounded-lg border border-neutral-200 bg-white shadow-xl md:w-[300px] md:rotate-0">
               <MatrixCard
                 task={activeTask}
                 listName={listNameMap.get(activeTask.listId)}

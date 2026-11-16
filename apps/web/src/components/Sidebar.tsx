@@ -188,85 +188,141 @@ export function Sidebar({
   const orderedTools = useMemo(() => sortByNavOrder(TOOL_ITEMS, navOrder), [navOrder]);
 
   // 移动端抽屉手势：左边缘右滑打开、抽屉内左滑关闭。
-  // 只用 Pointer 事件，不引第三方库；纵向优先的滑动一律让位给列表滚动。
+  // 触摸端必须走 touch 事件：浏览器一旦把滑动判定为页面滚动就会抛 pointercancel，
+  // 只监听 pointer 的手势在真机上会被当场掐断（桌面用鼠标测不出来，所以别轻信模拟测试）。
   useEffect(() => {
     const isPhone = () => window.innerWidth < 768;
-    const EDGE_ZONE = 20;
+    // 起手区要宽于 Android 手势返回的感应区（约 24dp），否则边缘滑动会被系统吃掉
+    const EDGE_ZONE = 40;
     const OPEN_THRESHOLD = 56;
     const CLOSE_RATIO = 0.3;
+    const SLOP = 8;
 
-    let tracking: null | { startX: number; startY: number; mode: 'open' | 'close'; claimed: boolean } =
-      null;
+    type Track = { startX: number; startY: number; mode: 'open' | 'close'; claimed: boolean };
+    let tracking: Track | null = null;
 
     const widthOf = () => asideRef.current?.offsetWidth ?? 288;
 
-    const onPointerDown = (event: PointerEvent) => {
+    function begin(x: number, y: number, target: EventTarget | null) {
+      tracking = null;
       if (!isPhone()) return;
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
       if (!openRef.current) {
-        if (event.clientX > EDGE_ZONE) return;
-        tracking = { startX: event.clientX, startY: event.clientY, mode: 'open', claimed: false };
+        if (x > EDGE_ZONE) return;
+        tracking = { startX: x, startY: y, mode: 'open', claimed: false };
         return;
       }
       const aside = asideRef.current;
-      if (!aside || !aside.contains(target)) return;
-      tracking = { startX: event.clientX, startY: event.clientY, mode: 'close', claimed: false };
-    };
+      if (!aside || !(target instanceof Node) || !aside.contains(target)) return;
+      tracking = { startX: x, startY: y, mode: 'close', claimed: false };
+    }
 
-    const onPointerMove = (event: PointerEvent) => {
-      if (!tracking) return;
-      const dx = event.clientX - tracking.startX;
-      const dy = event.clientY - tracking.startY;
+    /** 返回 true 表示这次移动已被手势接管，调用方应 preventDefault 阻止页面滚动 */
+    function move(x: number, y: number): boolean {
+      if (!tracking) return false;
+      const dx = x - tracking.startX;
+      const dy = y - tracking.startY;
       if (!tracking.claimed) {
-        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-        // 纵向为主：放弃接管，让抽屉内容正常滚动
-        if (Math.abs(dy) >= Math.abs(dx)) {
+        if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return false;
+        const wrongWay = tracking.mode === 'open' ? dx <= 0 : dx >= 0;
+        // 纵向为主或方向相反：放手，让列表滚动 / 让别的横向手势处理
+        if (Math.abs(dy) >= Math.abs(dx) || wrongWay) {
           tracking = null;
           setSwipeX(null);
-          return;
+          return false;
         }
         tracking.claimed = true;
       }
       const width = widthOf();
-      if (tracking.mode === 'open') {
-        if (dx <= 0) return;
-        setSwipeX(-width + Math.min(dx, width));
-      } else {
-        if (dx >= 0) return;
-        setSwipeX(Math.max(dx, -width));
-      }
-    };
+      if (tracking.mode === 'open') setSwipeX(-width + Math.min(dx, width));
+      else setSwipeX(Math.max(dx, -width));
+      return true;
+    }
 
-    const finish = (event: PointerEvent) => {
+    function finish(x: number) {
       if (!tracking) return;
       const state = tracking;
       tracking = null;
       setSwipeX(null);
       const width = widthOf();
-      const dx = event.clientX - state.startX;
+      const dx = x - state.startX;
       if (state.mode === 'open') {
         if (dx >= Math.min(OPEN_THRESHOLD, width * 0.25)) openHandler.current?.();
       } else if (dx <= -Math.min(OPEN_THRESHOLD, width * CLOSE_RATIO)) {
         closeHandler.current?.();
       }
-    };
+    }
 
-    const cancel = () => {
-      if (!tracking) return;
+    const reset = () => {
       tracking = null;
       setSwipeX(null);
     };
 
-    document.addEventListener('pointerdown', onPointerDown, { passive: true });
+    // 只有真的进入横向手势后才挂非被动 touchmove：既能在浏览器开始滚动前
+    // preventDefault 接管，又不会让全局非被动监听拖慢平时的滚动。
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      if (move(touch.clientX, touch.clientY) && event.cancelable) event.preventDefault();
+    };
+
+    const detachTouch = () => {
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', onTouchEnd);
+      document.removeEventListener('touchcancel', detachTouch);
+    };
+
+    const onTouchEnd = (event: TouchEvent) => {
+      const touch = event.changedTouches[0];
+      detachTouch();
+      finish(touch ? touch.clientX : 0);
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      detachTouch();
+      if (event.touches.length > 1) {
+        reset();
+        return;
+      }
+      const touch = event.touches[0];
+      if (!touch) return;
+      begin(touch.clientX, touch.clientY, event.target);
+      if (!tracking) return;
+      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchend', onTouchEnd);
+      document.addEventListener('touchcancel', detachTouch);
+    };
+
+    // 鼠标/触控板路径：便于桌面缩窄窗口时验证，不处理 touch（上面已接管）
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') return;
+      begin(event.clientX, event.clientY, event.target);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') return;
+      move(event.clientX, event.clientY);
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') return;
+      finish(event.clientX);
+    };
+
+    // 必须用捕获阶段：卡片里的按钮会对 pointerdown/touchstart 做 stopPropagation
+    // （防止误起拖拽），挂在冒泡阶段就永远收不到起手事件。
+    document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+    document.addEventListener('pointerdown', onPointerDown, { passive: true, capture: true });
     document.addEventListener('pointermove', onPointerMove, { passive: true });
-    document.addEventListener('pointerup', finish);
-    document.addEventListener('pointercancel', cancel);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', reset);
+    // 四象限/看板开始拖拽时让位，否则横向拖动会同时推开抽屉
+    window.addEventListener('ddl:dragstart', reset);
     return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
+      detachTouch();
+      document.removeEventListener('touchstart', onTouchStart, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', finish);
-      document.removeEventListener('pointercancel', cancel);
+      document.removeEventListener('pointerup', onPointerUp);
+      document.removeEventListener('pointercancel', reset);
+      window.removeEventListener('ddl:dragstart', reset);
     };
   }, []);
 
@@ -371,9 +427,10 @@ export function Sidebar({
         style={{
           paddingTop: 'env(safe-area-inset-top)',
           paddingBottom: 'env(safe-area-inset-bottom)',
-          // 手势进行中改用实时位移，松手立刻交还 CSS 过渡
-          transform: swipeX !== null ? `translateX(${swipeX}px)` : undefined,
-          transition: swipeX !== null ? 'none' : undefined,
+          // 手势进行中改用实时位移，松手立刻交还 CSS 过渡。
+          // 注意：Tailwind v4 的 translate 工具类用的是 CSS `translate` 属性，
+          // 若写 inline `transform` 会与它叠加 → 位移翻倍且方向相反（拉到 -554px）。
+          ...(swipeX !== null ? { translate: `${swipeX}px`, transition: 'none' } : null),
         }}
       >
         <div className="flex items-center gap-2 px-5 pt-5 pb-3 md:pt-6 md:pb-4">
