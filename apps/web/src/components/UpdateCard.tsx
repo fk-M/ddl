@@ -7,6 +7,7 @@ import {
   installAndroidUpdate,
   isDesktopApp,
   isNativeApp,
+  releasePageUrl,
   type ReleaseInfo,
 } from '../lib/update';
 import { Button, Card, SectionTitle } from './ui';
@@ -181,10 +182,22 @@ export function UpdateCard() {
       )}
 
       {phase === 'error' && (
-        <p className="mt-3 flex items-start gap-1.5 text-[12.5px] text-red-600">
+        <div className="mt-3 flex items-start gap-1.5 text-[12.5px] text-red-600">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-          {message || '更新失败'}
-        </p>
+          <div>
+            <p>{message || '更新失败'}</p>
+            {GITHUB_REPO && (
+              <a
+                href={releasePageUrl()}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 inline-block text-[12px] text-blue-600 hover:underline"
+              >
+                直接打开发布页手动下载 ↗
+              </a>
+            )}
+          </div>
+        </div>
       )}
 
       {phase === 'available' && release && (

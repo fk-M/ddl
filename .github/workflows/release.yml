@@ -150,3 +150,32 @@ jobs:
             apps/desktop/dist-win/*.blockmap
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  manifest:
+    name: Update version.json
+    runs-on: ubuntu-latest
+    needs: [android, windows]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # App 的「检查更新」优先读仓库里的 version.json（raw.githubusercontent / jsDelivr），
+      # 只有它读不到才退回 api.github.com —— 匿名 API 每小时 60 次，手机共用出口 IP 极易被打满。
+      - name: 写入 version.json 并提交
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.${GITHUB_RUN_NUMBER}"
+          fi
+          export VERSION
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          node -e 'const fs=require("fs");const v=process.env.VERSION;fs.writeFileSync("version.json",JSON.stringify({version:v,releasedAt:new Date().toISOString(),android:"DDL-"+v+"-android.apk",windows:"DDL-"+v+"-x64.exe"},null,2)+"\n");'
+          cat version.json
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add version.json
+          git commit -m "chore(release): version.json -> v$VERSION" || echo "内容未变化，跳过提交"
+          git push
