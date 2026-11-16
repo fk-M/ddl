@@ -1,6 +1,7 @@
 import type { AppSettings, Task } from '@ddl/shared';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
+import { isNativeNotify, postNotification, syncReminderAlarms } from '../lib/notify';
 import { playRemindSound } from '../lib/sound';
 
 export type ReminderNotice = { key: string; title: string; dueAt: string | null; sound?: string | null };
@@ -37,7 +38,11 @@ export function useReminders(settings?: AppSettings) {
     async function load() {
       try {
         const data = await api.tasks({ status: 'pending', limit: 300 });
-        if (!cancelled) setTasks(data.filter((task) => task.remindAt || task.reminders.length > 0));
+        if (cancelled) return;
+        setTasks(data.filter((task) => task.remindAt || task.reminders.length > 0));
+        // 手机端把未来的提醒交给系统闹钟，App 退到后台也能准时弹
+        const withReminders = data.filter((task) => task.remindAt || task.reminders.length > 0);
+        void syncReminderAlarms(withReminders);
       } catch {
         // 提醒是增强能力，拉取失败静默忽略
       }
@@ -87,7 +92,12 @@ export function useReminders(settings?: AppSettings) {
         playRemindSound(sound, settings?.remindVolume ?? 70);
       }
 
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      if (isNativeNotify()) {
+        // 原生的后台闹钟已经在精确时刻弹过了；这里补一条静默的，避免闹钟被系统清掉时彻底没提示
+        for (const item of due) {
+          void postNotification('该做这件事了', item.task.title, true);
+        }
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         for (const item of due) {
           new Notification('该做这件事了', { body: item.task.title, tag: item.key });
         }
