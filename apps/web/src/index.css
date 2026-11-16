@@ -1,0 +1,323 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system,
+    sans-serif;
+}
+
+:root {
+  --accent: #3b82f6;
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, white);
+  --surface: #ffffff;
+  --surface-muted: #fbfbfa;
+  --canvas: #f6f6f4;
+  --text-strong: #171717;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* 移动端用动态视口高度，避免浏览器地址栏收起时底部被裁掉 */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}
+
+body {
+  margin: 0;
+  background-color: var(--canvas);
+  color: var(--text-strong);
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-sans);
+  transition: background-color 0.18s ease, color 0.18s ease;
+  /* 触屏：去掉点击高亮，禁止页面整体回弹露出白底 */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+  text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+input,
+button,
+textarea,
+select {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #d4d4d4;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+/* 横向标签栏等场景：隐藏滚动条，避免窄屏出现一条灰杠 */
+.ddl-no-scrollbar {
+  scrollbar-width: none;
+}
+
+.ddl-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes ddl-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ddl-fade-in {
+  animation: ddl-fade-in 0.16s ease-out;
+}
+
+@keyframes ddl-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.ddl-slide-in {
+  animation: ddl-slide-in 0.18s ease-out;
+}
+
+@keyframes ddl-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.ddl-pop {
+  animation: ddl-pop 0.14s ease-out;
+}
+
+/* ============================ 深色主题 ============================ */
+/* 组件统一采用中性色工具类，这里集中映射，避免逐处写 dark: 变体 */
+
+.dark body {
+  background-color: #0e0f11;
+  color: #e8e8ea;
+  --surface: #16171a;
+  --surface-muted: #121316;
+  --canvas: #0e0f11;
+  --text-strong: #e8e8ea;
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, #16171a);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: #37383d;
+}
+
+.dark .bg-white {
+  background-color: #16171a !important;
+}
+
+.dark .bg-\[\#fbfbfa\] {
+  background-color: #121316 !important;
+}
+
+.dark .bg-\[\#f6f6f4\] {
+  background-color: #0e0f11 !important;
+}
+
+.dark .bg-neutral-50 {
+  background-color: #1a1b1f !important;
+}
+
+.dark .bg-neutral-100 {
+  background-color: #1e1f23 !important;
+}
+
+.dark .bg-neutral-200 {
+  background-color: #26272b !important;
+}
+
+.dark .bg-neutral-900 {
+  background-color: #e8e8ea !important;
+  color: #16171a !important;
+}
+
+.dark .bg-neutral-800 {
+  background-color: #26272b !important;
+}
+
+.dark [class*="bg-neutral-200/"] {
+  background-color: #26272b !important;
+}
+
+.dark [class*="hover:bg-neutral-200"]:hover {
+  background-color: #2a2b30 !important;
+}
+
+.dark [class*="hover:bg-neutral-100"]:hover {
+  background-color: #232428 !important;
+}
+
+.dark [class*="hover:bg-neutral-50"]:hover {
+  background-color: #1c1d21 !important;
+}
+
+.dark .hover\:bg-neutral-100:hover,
+.dark .hover\:bg-neutral-50:hover {
+  background-color: #232428 !important;
+}
+
+.dark .text-neutral-900,
+.dark .text-neutral-800 {
+  color: #f2f2f4 !important;
+}
+
+.dark .text-neutral-700,
+.dark .text-neutral-600 {
+  color: #c8c8ce !important;
+}
+
+.dark .text-neutral-500,
+.dark .text-neutral-400 {
+  color: #8d8d97 !important;
+}
+
+.dark .text-neutral-300 {
+  color: #6b6b74 !important;
+}
+
+.dark .border-neutral-100,
+.dark .border-neutral-200,
+.dark .border-neutral-300 {
+  border-color: #2a2b30 !important;
+}
+
+.dark [class*="border-neutral-200/"],
+.dark [class*="border-neutral-100/"] {
+  border-color: #26272b !important;
+}
+
+.dark .divide-neutral-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #26272b !important;
+}
+
+.dark .bg-red-50 {
+  background-color: #2a1518 !important;
+}
+
+.dark .border-red-200 {
+  border-color: #4a2027 !important;
+}
+
+.dark .text-red-700,
+.dark .text-red-600 {
+  color: #f3a0a0 !important;
+}
+
+.dark .bg-emerald-50 {
+  background-color: #12261c !important;
+}
+
+.dark .bg-amber-50 {
+  background-color: #2a2110 !important;
+}
+
+.dark .shadow-sm,
+.dark .shadow {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.5) !important;
+}
+
+.dark .shadow-lg,
+.dark .shadow-xl {
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.55) !important;
+}
+
+.dark input,
+.dark textarea,
+.dark select {
+  color-scheme: dark;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #6b6b74;
+}
+
+/* ---------- 滑块 range 统一外观 ---------- */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--track, #e5e7eb);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: var(--accent, #3b82f6);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+input[type='range']::-moz-range-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--track, #e5e7eb);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--accent, #3b82f6);
+  border: 2px solid #fff;
+}
+
+.dark input[type='range']::-webkit-slider-runnable-track,
+.dark input[type='range']::-moz-range-track {
+  background: #3a3a44;
+}
+
+.dark input[type='range']::-webkit-slider-thumb,
+.dark input[type='range']::-moz-range-thumb {
+  border-color: #1c1c22;
+}

@@ -1,0 +1,146 @@
+name: Release
+
+# 推一个 v* 标签即触发：构建 Android APK 与 Windows 安装包，一并挂到该标签的 Release 上
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # 前端更新检查读这个变量，决定去哪个仓库找 Release
+  VITE_GITHUB_REPO: ${{ github.repository }}
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 解析版本号
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "DDL_VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "DDL_VERSION_NAME=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          fi
+          echo "DDL_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 还原签名证书
+        env:
+          DDL_KEYSTORE_BASE64: ${{ secrets.DDL_KEYSTORE_BASE64 }}
+          DDL_KEYSTORE_PASSWORD: ${{ secrets.DDL_KEYSTORE_PASSWORD }}
+          DDL_KEY_ALIAS: ${{ secrets.DDL_KEY_ALIAS }}
+          DDL_KEY_PASSWORD: ${{ secrets.DDL_KEY_PASSWORD }}
+        run: |
+          if [ -z "$DDL_KEYSTORE_BASE64" ]; then
+            echo "::error::缺少 DDL_KEYSTORE_BASE64 机密，无法用正式签名构建（未签名的包无法覆盖安装已有机型）"
+            exit 1
+          fi
+          echo "$DDL_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ddl-release.keystore"
+          echo "DDL_KEYSTORE_PATH=$RUNNER_TEMP/ddl-release.keystore" >> "$GITHUB_ENV"
+          echo "DDL_KEYSTORE_PASSWORD=$DDL_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "DDL_KEY_ALIAS=$DDL_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "DDL_KEY_PASSWORD=$DDL_KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "签名证书已还原：$(ls -l "$RUNNER_TEMP/ddl-release.keystore" | awk '{print $5}') 字节"
+
+      - name: 构建前端
+        run: npm run build -w @ddl/web
+
+      - name: 同步前端到安卓工程
+        run: node apps/mobile/scripts/sync-web.mjs
+
+      - name: 构建 APK
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 重命名产物
+        run: |
+          mkdir -p release-artifacts
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+             "release-artifacts/DDL-${DDL_VERSION_NAME}-android.apk"
+
+      - name: 校验 APK 签名
+        run: |
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | sort -r | head -1)
+          "$APKSIGNER" verify --print-certs release-artifacts/DDL-*-android.apk | head -4
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/DDL-*-android.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  windows:
+    name: Windows Installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 解析版本号
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "DDL_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          # 桌面端的 app.getVersion() 来自 package.json，必须与 Release 版本一致，
+          # 否则 electron-updater 会一直判断不出新版本
+          npm pkg set "version=$VERSION" -w @ddl/desktop
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 准备资源（前端 + 服务端单文件 + 运行时依赖）
+        run: npm run prepare:res -w @ddl/desktop
+
+      - name: 打包 Windows 安装包
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          npx electron-builder --win --publish never \
+            --config.publish.provider=github \
+            --config.publish.owner=${{ github.repository_owner }} \
+            --config.publish.repo=${{ github.event.repository.name }}
+
+      - name: 重命名产物
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          cp apps/desktop/dist-win/DDL-*-x64.exe "release-artifacts/DDL-${DDL_VERSION_NAME}-windows-setup.exe"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          # latest.yml 与 blockmap 是 electron-updater 的增量更新依据，必须一起上传
+          files: |
+            release-artifacts/DDL-*-windows-setup.exe
+            apps/desktop/dist-win/latest.yml
+            apps/desktop/dist-win/*.blockmap
+          generate_release_notes: true
+          fail_on_unmatched_files: false

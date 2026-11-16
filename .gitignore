@@ -1,0 +1,41 @@
+node_modules/
+dist/
+dist-ssr/
+.env
+.env.local
+*.log
+apps/server/data/
+.preview/
+.DS_Store
+.vite/
+.turbo/
+
+# 桌面端构建产物
+apps/desktop/resources/
+apps/desktop/release/
+apps/desktop/dist-win/
+apps/desktop/out-*/
+apps/desktop/build/*.ico
+
+# 安卓端
+apps/mobile/android/.gradle/
+apps/mobile/android/build/
+apps/mobile/android/app/build/
+apps/mobile/android/local.properties
+release-artifacts/
+
+# 签名私钥（绝不能进公开仓库）：CI 从 Actions Secrets 还原
+apps/mobile/android/ddl-release.keystore
+apps/mobile/android/ddl-release.properties
+*.keystore
+*.jks
+
+# 本地凭据与临时抓取产物
+githubtoken.txt
+*_token.txt
+saikr-bundle.js
+saikr.html
+sdu.html
+
+# 本地工作笔记（不含源码，避免公开内部记录）
+.workbuddy/

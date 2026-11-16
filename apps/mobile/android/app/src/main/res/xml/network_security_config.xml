@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机端通过局域网明文 HTTP 访问电脑上的服务。
+  Android 9 (API 28) 起默认禁止 cleartext，这里显式放行；
+  同时保留 WebView 自身加载 http://localhost 的能力。
+  仅在可信的家庭 / 局域网环境使用。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- 10.x / 192.168.x / 172.16~31.x 等私网段交给 base-config 统一放行 -->
+    </domain-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

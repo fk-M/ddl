@@ -1,0 +1,12 @@
+{
+	"appId": "com.ddl.app",
+	"appName": "截止日",
+	"webDir": "../web/dist",
+	"android": {
+		"allowMixedContent": true
+	},
+	"server": {
+		"androidScheme": "http",
+		"cleartext": true
+	}
+}

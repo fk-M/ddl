@@ -1,0 +1,48 @@
+appId: com.ddl.desktop
+productName: 截止日
+electronVersion: 33.4.11
+copyright: Copyright © 2026 DDL
+
+directories:
+  output: dist-win
+  buildResources: build
+
+files:
+  - electron/**/*
+  - package.json
+
+extraResources:
+  - from: resources
+    to: app-resources
+
+asar: true
+compression: normal
+removePackageScripts: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.png
+  artifactName: DDL-${version}-${arch}.${ext}
+  legalTrademarks: 截止日
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 截止日
+  installerLanguages:
+    - zh_CN
+  language: '2052'
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: DDL-${version}-portable.${ext}

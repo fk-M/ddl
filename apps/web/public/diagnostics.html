@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>DDL · 可视化检测</title>
+<style>
+  :root {
+    --bg: #f6f7f8;
+    --card: #ffffff;
+    --line: #e6e8eb;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --accent: #4f6ef7;
+    --ok: #15803d;
+    --ok-bg: #eaf7ee;
+    --warn: #a16207;
+    --warn-bg: #fff7e6;
+    --bad: #b91c1c;
+    --bad-bg: #fdecec;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .top {
+    background: var(--card);
+    border-bottom: 1px solid var(--line);
+    padding: 18px 20px 16px;
+    position: sticky; top: 0; z-index: 5;
+  }
+  .top-inner { max-width: 1100px; margin: 0 auto; }
+  .title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -.2px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+    background: #eef1ff; color: #3b4dbb; border: 1px solid #dfe4ff;
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  button, .btn {
+    font: inherit; font-size: 12.5px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--text);
+    border-radius: 8px; padding: 7px 13px; transition: .15s;
+  }
+  button:hover, .btn:hover { border-color: #b9bfc9; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(.94); }
+  button:disabled { opacity: .55; cursor: default; }
+  input[type=text], select {
+    font: inherit; font-size: 12.5px; padding: 7px 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text);
+    outline: none; min-width: 0;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--accent); }
+  main { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
+  section { margin-bottom: 18px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .card + .card { margin-top: 12px; }
+  .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  h2 { font-size: 15px; margin: 0; font-weight: 650; }
+  .hint { color: var(--muted); font-size: 12px; margin: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .kv { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; background: #fcfcfd; min-width: 0; }
+  .kv b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .2px; }
+  .kv span { display: block; font-family: var(--mono); font-size: 12px; margin-top: 3px; word-break: break-all; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+  td.mono { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 650; white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .pill.idle { background: #f0f1f3; color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .row label { font-size: 12px; color: var(--muted); }
+  .grow { flex: 1 1 260px; }
+  .progress { height: 4px; background: #eef0f3; border-radius: 4px; overflow: hidden; margin-top: 10px; }
+  .progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .frame-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
+  .frame-head { padding: 8px 11px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .frame-wrap { position: relative; overflow: hidden; background: #fafafa; }
+  .frame-wrap iframe { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; background: #fff; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.75; }
+  .note code { font-family: var(--mono); background: #f1f2f4; padding: 1px 5px; border-radius: 4px; font-size: 11.5px; word-break: break-all; }
+  .note ul { padding-left: 18px; margin: 6px 0; }
+  .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .summary > div { border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; font-size: 12px; }
+  .summary b { font-size: 18px; display: block; line-height: 1.3; }
+  .offscreen { position: fixed; left: -20000px; top: 0; pointer-events: none; opacity: 0; }
+  .banner { border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.7; margin: 14px 0 0; border: 1px solid; }
+  .banner.bad { background: var(--bad-bg); border-color: #f3c2c2; color: var(--bad); }
+  .banner.warn { background: var(--warn-bg); border-color: #f0dcae; color: var(--warn); }
+  .banner.ok { background: var(--ok-bg); border-color: #c7e8d1; color: var(--ok); }
+  .banner b { font-weight: 700; }
+  .banner code { font-family: var(--mono); background: rgba(0,0,0,.05); padding: 1px 5px; border-radius: 4px; font-size: 12px; word-break: break-all; }
+  .banner a { color: inherit; font-weight: 700; text-decoration: underline; }
+  .banner[hidden] { display: none; }
+  @media (max-width: 640px) {
+    .top { padding: 14px; }
+    main { padding: 14px 12px 50px; }
+    .card { padding: 13px; }
+    table { font-size: 11.5px; }
+    th, td { padding: 6px 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="top-inner">
+    <div class="title-row">
+      <h1>DDL · 可视化检测</h1>
+      <span class="badge" id="envBadge">检测中…</span>
+      <span class="badge" id="layoutBadge">布局：—</span>
+    </div>
+    <p class="sub">逐项核对运行环境、接口连通、本地数据与每个页面的构建完整性；两端分别打开同一地址即可对比结果。</p>
+    <div class="actions">
+      <button class="primary" id="runAll">一键全部检测</button>
+      <button id="runNet">只测接口</button>
+      <button id="runViews">只测页面</button>
+      <button id="copyBtn">复制结果</button>
+      <button id="downloadBtn">下载报告 JSON</button>
+    </div>
+    <div class="progress"><i id="progressBar"></i></div>
+    <div id="preflightBanner" class="banner" hidden></div>
+  </div>
+</div>
+
+<main>
+  <section>
+    <div class="card">
+      <div class="sec-head"><h2>① 运行环境</h2><p class="hint">只读采集，不修改应用数据</p></div>
+      <div class="grid" id="envGrid"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="sec-head">
+        <h2>② 服务端连通性</h2>
+        <p class="hint">默认取当前页面来源；手机浏览器测电脑时请填电脑的局域网地址</p>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <label for="baseInput">服务地址</label>
+        <input class="grow" type="text" id="baseInput" placeholder="http://127.0.0.1:3001" />
+        <button id="resetBase">用当前来源</button>
+      </div>
+      <table>
+        <thead><tr><th style="width:30%">接口</th><th>状态</th><th>耗时</th><th>返回</th><th>说明</th></tr></thead>
+        <tbody id="netBody"><tr><td colspan="5" class="note">尚未检测</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="sec-head"><h2>③ 本地数据（IndexedDB）</h2><p class="hint">手机端核心数据存在 ddl-local；电脑直连模式为空属正常</p></div>
+      <div class="grid" id="dbGrid"></div>
+      <p class="note" id="dbNote" style="margin:10px 0 0"></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="sec-head">
+        <h2>④ 页面完整性逐项检测</h2>
+        <p class="hint">在隐藏 iframe 中真实加载应用，检查 DOM 结构、错误横幅、运行时异常与横向溢出</p>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <label for="widthSelect">检测宽度</label>
+        <select id="widthSelect">
+          <option value="auto">跟随当前窗口</option>
+          <option value="390">手机 390px</option>
+          <option value="820">平板 820px</option>
+          <option value="1280">桌面 1280px</option>
+        </select>
+        <label for="localFirst"><input type="checkbox" id="localFirst" /> 强制本地优先（模拟手机离线）</label>
+      </div>
+      <div class="summary" id="viewSummary"></div>
+      <table style="margin-top:12px">
+        <thead><tr><th>视图</th><th>布局</th><th>结果</th><th>内容</th><th>日期格</th><th>溢出</th><th>说明</th></tr></thead>
+        <tbody id="viewBody"><tr><td colspan="7" class="note">尚未检测</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="sec-head">
+        <h2>⑤ 三档布局实时预览</h2>
+        <p class="hint">同一页面在手机 / 平板 / 桌面宽度下的真实渲染（缩放显示）</p>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <label for="previewView">预览视图</label>
+        <select id="previewView">
+          <option value="calendar">日历</option>
+          <option value="today">今天</option>
+          <option value="matrix">四象限</option>
+          <option value="settings">设置</option>
+          <option value="all">全部任务</option>
+        </select>
+        <button id="refreshFrames">刷新预览</button>
+      </div>
+      <div class="frames" id="frames"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="sec-head"><h2>⑥ 两端怎么测 / 判定标准</h2></div>
+      <div class="note">
+        <p style="margin:0 0 6px"><b>打开方式（本轮没有重新打包安装包）</b></p>
+        <ul>
+          <li><b>不要</b>用对话里自动弹出的静态预览页，也不要双击本地 HTML 文件：那种地址只托管了 <code>diagnostics.html</code> 一个文件，<code>/health</code> 和应用首页都是 404，检测必然全红。</li>
+          <li>电脑上<b>重新</b>双击 <code>start-lan.bat</code>（项目根目录），等黑窗口显示 <code>CORS 合计：5/5 通过</code>。本轮改了服务端响应头，必须重启旧黑窗口，否则逐页检测会被 <code>X-Frame-Options: DENY</code> 挡住（页面顶部会自动给出这条提示）。</li>
+          <li>电脑浏览器打开 <code id="pcUrl">http://127.0.0.1:3001/diagnostics.html</code>。</li>
+          <li>手机连同一 Wi-Fi，浏览器打开 <code id="phoneUrl">http://电脑IP:3001/diagnostics.html</code>；黑窗口里会打印电脑 IP。</li>
+          <li>若用开发服务器，也可打开 <code>http://127.0.0.1:5173/diagnostics.html</code>。</li>
+          <li>桌面/手机 <b>已安装的 App 内</b>暂时还没有这一页：需要等你确认测试结果后重新打包，届时会内置进安装包。</li>
+        </ul>
+        <p style="margin:8px 0 6px"><b>本轮已修复、应该看到的结果</b></p>
+        <ul>
+          <li>日历页必须有 <b>≥ 35 个日期格</b>，即使服务不可达也不能只剩星期表头。</li>
+          <li>顶部不再出现 <code>Cannot read properties of null (reading 'data')</code> 红条。</li>
+          <li>手机端离线时，设置 / 习惯 / 信息源等非核心模块不再铺满红色网络错误条。</li>
+          <li>三档宽度下 <code>溢出 = 0</code>；<code>data-layout</code> 分别为 phone / tablet / desktop。</li>
+        </ul>
+        <p style="margin:8px 0 0"><b>如何反馈</b>：点「复制结果」或「下载报告 JSON」，把两端的结果发我；若某一页仍不完整，告诉我视图名 + 宽度，我按这份报告定位。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const nowStamp = () => new Date().toLocaleString('zh-CN', { hour12: false });
+
+  const VIEWS = [
+    ['today', '今天'], ['inbox', '收件箱'], ['next7', '最近 7 天'], ['all', '全部任务'],
+    ['matrix', '四象限'], ['calendar', '日历'], ['focus', '番茄专注'], ['habits', '习惯打卡'],
+    ['anniversaries', '倒数纪念日'], ['tags', '标签与过滤器'], ['trash', '垃圾桶'],
+    ['sources', '信息源'], ['settings', '设置'],
+  ];
+  const PRESETS = [
+    { key: 'phone', label: '手机', width: 390, height: 844 },
+    { key: 'tablet', label: '平板', width: 820, height: 1180 },
+    { key: 'desktop', label: '桌面', width: 1280, height: 800 },
+  ];
+  const ENDPOINTS = [
+    ['/health', '健康检查'],
+    ['/api/lists', '清单'],
+    ['/api/tasks?limit=5', '任务'],
+    ['/api/lunar/cells?year=' + new Date().getFullYear() + '&month=' + (new Date().getMonth() + 1) + '&weekStartsMonday=true', '农历格子'],
+    ['/api/settings', '设置'],
+    ['/api/sync/pull', '同步快照'],
+  ];
+
+  const report = {
+    generatedAt: nowStamp(),
+    env: {},
+    network: [],
+    localDb: {},
+    views: [],
+    errors: [],
+  };
+
+  function currentBase() {
+    const value = $('baseInput').value.trim().replace(/\/+$/, '');
+    return value || (location.protocol === 'file:' ? 'http://127.0.0.1:3001' : location.origin);
+  }
+  function layoutOf(width) { return width < 768 ? 'phone' : width < 1280 ? 'tablet' : 'desktop'; }
+  function pill(status, text) { return '<span class="pill ' + status + '">' + esc(text) + '</span>'; }
+  function setProgress(ratio) { $('progressBar').style.width = Math.round(ratio * 100) + '%'; }
+
+  /**
+   * 推算「正确的」DDL 服务地址。
+   * 手机 App 内（Capacitor WebView，origin 是 http://localhost）时，localhost 指手机自己，
+   * 必须优先用设置页里保存的电脑地址 ddl.serverUrl，否则提示的链接永远打不开。
+   */
+  function suggestedUrl() {
+    try {
+      const saved = localStorage.getItem('ddl.serverUrl');
+      if (saved) {
+        const raw = /^https?:\/\//i.test(saved) ? saved : 'http://' + saved;
+        const url = new URL(raw);
+        if (!url.port) url.port = '3001';
+        if (url.origin !== location.origin) return url.origin + '/diagnostics.html';
+      }
+    } catch { /* localStorage 不可用时回退 */ }
+    const host = location.hostname || '127.0.0.1';
+    const fallbackHost = location.protocol === 'file:' || host === 'localhost' ? '127.0.0.1' : host;
+    return 'http://' + fallbackHost + ':3001/diagnostics.html';
+  }
+  function showBanner(kind, html) {
+    const node = $('preflightBanner');
+    node.className = 'banner ' + kind;
+    node.innerHTML = html;
+    node.hidden = false;
+  }
+  function hideBanner() { $('preflightBanner').hidden = true; }
+
+  /**
+   * 打开方式预检：很多「检测报错」其实不是应用坏了，而是页面打开在一个只有
+   * HTML、没有后端的静态预览地址上（例如对话里自动弹出的预览面板），或服务端
+   * 仍是旧进程（X-Frame-Options: DENY）。先判明再决定要不要跑逐页检测，
+   * 避免刷出 13 条一模一样的假失败。
+   */
+  async function preflight() {
+    const base = currentBase();
+    const result = { base, serverOk: false, frameAllowed: true, xfo: '', status: 0, reason: '', probe: '' };
+    if (location.protocol === 'file:') {
+      result.reason = '本地文件方式（file://）打开，没有同源后端';
+      return result;
+    }
+    try {
+      const res = await fetch(base + '/health', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+      result.status = res.status;
+      result.xfo = res.headers.get('x-frame-options') || '';
+      const text = await res.text();
+      let json = false;
+      try { const parsed = JSON.parse(text); json = Boolean(parsed && typeof parsed === 'object'); } catch { json = false; }
+      result.serverOk = res.ok && json;
+      if (!result.serverOk) {
+        result.reason = res.status === 404
+          ? '当前地址下 /health 返回 404 —— 这里只有静态 HTML，没有 DDL 后端'
+          : (json ? '/health 返回了异常状态' : '/health 返回的不是 JSON（多半被别的服务回落成了页面）');
+      }
+    } catch (error) {
+      result.reason = '连不上 ' + esc(base) + '：' + esc(error.name === 'AbortError' ? '超时' : (error.message || error));
+    }
+    // 只有后端可达时才有必要真的试一次 iframe；/health 的响应头不能代表应用页面
+    // 的头（例如 Vite 代理），所以以「能否读到 iframe 的 DOM」为准。
+    if (result.serverOk) {
+      result.frameAllowed = await probeFrameAllowed();
+      if (!result.frameAllowed) {
+        result.probe = '同源 iframe 读不到 DOM（通常是 X-Frame-Options: DENY）';
+      }
+    }
+    return result;
+  }
+
+  function probeFrameAllowed() {
+    return new Promise((resolve) => {
+      const frame = document.createElement('iframe');
+      frame.className = 'offscreen';
+      frame.style.width = '390px';
+      frame.style.height = '300px';
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { frame.remove(); } catch { /* ignore */ }
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(false), 4500);
+      frame.addEventListener('load', () => {
+        setTimeout(() => {
+          try { finish(Boolean(frame.contentDocument && frame.contentDocument.querySelector('#root'))); }
+          catch { finish(false); }
+        }, 900);
+      }, { once: true });
+      frame.addEventListener('error', () => finish(false), { once: true });
+      document.body.appendChild(frame);
+      frame.src = appUrl('today', 390);
+    });
+  }
+
+  /** 把「打开方式不对」渲染成一条醒目提示，而不是 13 条一模一样的假失败 */
+  function blockViews(pf) {
+    const right = suggestedUrl();
+    const isFile = location.protocol === 'file:';
+    const head = pf.serverOk
+      ? '<b>服务是旧进程，逐页检测已跳过</b>'
+      : '<b>当前不是 DDL 服务的地址，逐页检测已跳过</b>';
+    const detail = pf.serverOk
+      ? esc(pf.probe || '同源 iframe 不可用') + '。服务端本轮已改为 SAMEORIGIN，但旧黑窗口不会自动加载新代码 —— 请重新双击项目根目录的 <code>start-lan.bat</code>（它会自动结束 3001 上的旧 node 进程），等出现 <code>CORS 合计：5/5 通过</code> 后再刷新本页。'
+      : esc(pf.reason) + '。' + (isFile
+          ? '不要双击本地 HTML 文件，也不要用对话里自动弹出的静态预览页（那个地址只托管了这一个 HTML，没有后端）。'
+          : '对话里自动弹出的静态预览只托管了 diagnostics.html 一个文件，不能用来做接口与页面检测。');
+    showBanner(pf.serverOk ? 'warn' : 'bad',
+      head + '<br>' + detail +
+      '<br>正确地址：<a href="' + esc(right) + '">' + esc(right) + '</a>' +
+      '　（手机把 127.0.0.1 换成黑窗口打印的电脑 IP）');
+    $('viewSummary').innerHTML = '<div><b>—</b>未检测（先修正打开方式）</div>';
+    $('viewBody').innerHTML =
+      '<tr><td colspan="7"><span class="pill ' + (pf.serverOk ? 'warn' : 'bad') + '">已跳过</span> ' +
+      esc(pf.serverOk ? pf.probe : pf.reason) + '。上面的橙/红横幅写了具体修复步骤，修好后点「只测页面」即可。</td></tr>';
+    report.views = [];
+    report.generatedAt = nowStamp();
+    report.errors = ['打开方式：' + (pf.reason || pf.probe) + '｜正确地址：' + right];
+  }
+
+  function collectEnv() {
+    const caps = Boolean(window.Capacitor);
+    const url = new URL(location.href);
+    const localFirst = caps || url.searchParams.get('localfirst') === '1';
+    const width = window.innerWidth;
+    const env = {
+      time: nowStamp(),
+      pageUrl: location.href,
+      origin: location.origin,
+      viewport: width + ' × ' + window.innerHeight,
+      cssWidth: document.documentElement.clientWidth,
+      dpr: window.devicePixelRatio || 1,
+      screen: (screen.width || 0) + ' × ' + (screen.height || 0),
+      layout: layoutOf(width),
+      userAgent: navigator.userAgent,
+      capacitor: caps,
+      localFirst: localFirst,
+      serverUrl: (() => { try { return localStorage.getItem('ddl.serverUrl') || '(未设置)'; } catch { return '(不可读)'; } })(),
+      indexedDb: typeof indexedDB !== 'undefined',
+      touch: ('ontouchstart' in window) || navigator.maxTouchPoints > 0,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+    report.env = env;
+    $('envGrid').innerHTML = [
+      ['时间', env.time], ['视口 / CSS 宽度', env.viewport + ' / ' + env.cssWidth],
+      ['设备像素比 DPR', env.dpr], ['屏幕', env.screen],
+      ['当前布局档位', env.layout], ['Capacitor WebView', env.capacitor ? '是' : '否'],
+      ['本地优先模式', env.localFirst ? '是' : '否'], ['触屏', env.touch ? '是' : '否'],
+      ['服务端地址', env.serverUrl], ['IndexedDB 可用', env.indexedDb ? '是' : '否'],
+      ['页面来源', env.origin], ['User-Agent', env.userAgent],
+    ].map(([k, v]) => '<div class="kv"><b>' + esc(k) + '</b><span>' + esc(v) + '</span></div>').join('');
+    $('envBadge').textContent = (env.capacitor ? 'App WebView' : '浏览器') + ' · ' + env.layout;
+    $('layoutBadge').textContent = '布局：' + env.layout + '（' + width + 'px）';
+    // 无论从哪个地址打开，都只显示 3001 这个真正的服务地址，避免误导
+    $('pcUrl').textContent = 'http://127.0.0.1:3001/diagnostics.html';
+    const lanHost = ['127.0.0.1', 'localhost'].includes(location.hostname) ? '电脑IP' : location.hostname;
+    $('phoneUrl').textContent = 'http://' + lanHost + ':3001/diagnostics.html';
+    return env;
+  }
+
+  async function probe(base, path) {
+    const started = performance.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    try {
+      const res = await fetch(base + path, { signal: controller.signal, cache: 'no-store' });
+      clearTimeout(timer);
+      const raw = await res.text();
+      let parsed = null, kind = '非 JSON', count = '—';
+      try {
+        parsed = JSON.parse(raw);
+        kind = 'JSON';
+        const data = parsed && typeof parsed === 'object' && 'data' in parsed ? parsed.data : parsed;
+        if (Array.isArray(data)) count = data.length + ' 条';
+        else if (data && typeof data === 'object') {
+          if (Array.isArray(data.cells)) count = data.cells.length + ' 格';
+          else if (Array.isArray(data.tasks)) count = data.tasks.length + ' 任务';
+          else count = Object.keys(data).length + ' 字段';
+        }
+      } catch { kind = raw.trim().startsWith('<') ? 'HTML（可能是 WebView 回落）' : '非 JSON'; }
+      return {
+        path, ok: res.ok, status: res.status, ms: Math.round(performance.now() - started),
+        kind, count,
+        note: res.ok
+          ? (kind === 'JSON' ? '正常' : '⚠ 200 但不是 JSON，前端会转成可识别的连接错误')
+          : (parsed?.error?.message || (res.status === 404 ? '接口不存在 —— 当前地址不是 DDL 服务' : 'HTTP ' + res.status)),
+      };
+    } catch (error) {
+      clearTimeout(timer);
+      return { path, ok: false, status: 0, ms: Math.round(performance.now() - started), kind: '—', count: '—', note: error.name === 'AbortError' ? '超时（7s）' : ('连接失败：' + (error.message || error)) };
+    }
+  }
+
+  async function runNetwork() {
+    const base = currentBase();
+    $('baseInput').value = base;
+    $('netBody').innerHTML = ENDPOINTS.map(([p]) => '<tr><td class="mono">' + esc(p) + '</td><td colspan="4">检测中…</td></tr>').join('');
+    const rows = [];
+    for (const [path] of ENDPOINTS) {
+      const result = await probe(base, path);
+      rows.push(result);
+      $('netBody').innerHTML = rows.map((r) =>
+        '<tr><td class="mono">' + esc(r.path) + '</td><td>' + pill(r.ok && r.kind === 'JSON' ? 'ok' : r.ok ? 'warn' : 'bad', r.status || 'ERR') + '</td><td>' + r.ms + ' ms</td><td>' + esc(r.kind + ' / ' + r.count) + '</td><td>' + esc(r.note) + '</td></tr>'
+      ).join('') + ENDPOINTS.slice(rows.length).map(([p]) => '<tr><td class="mono">' + esc(p) + '</td><td colspan="4">检测中…</td></tr>').join('');
+    }
+    report.network = rows;
+    return rows;
+  }
+
+  function openLocalDb() {
+    return new Promise((resolve) => {
+      const request = indexedDB.open('ddl-local');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+      request.onupgradeneeded = (event) => {
+        // 只读检测：若库不存在，绝不创建 store，直接中止升级
+        event.target.transaction.abort();
+        resolve(null);
+      };
+    });
+  }
+  function readStore(db, name) {
+    return new Promise((resolve) => {
+      if (!db.objectStoreNames.contains(name)) return resolve(null);
+      try {
+        const tx = db.transaction(name, 'readonly');
+        const req = tx.objectStore(name).getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      } catch { resolve(null); }
+    });
+  }
+  async function runLocalDb() {
+    const empty = { available: typeof indexedDB !== 'undefined', exists: false, stores: {}, meta: {}, note: '' };
+    if (!empty.available) { report.localDb = empty; renderDb(empty); return empty; }
+    let exists = false;
+    try {
+      if (typeof indexedDB.databases === 'function') {
+        const list = await indexedDB.databases();
+        exists = list.some((item) => item.name === 'ddl-local');
+      } else exists = true;
+    } catch { exists = true; }
+    if (!exists) {
+      empty.note = '本机没有 ddl-local 数据库。电脑端直连 PGlite 属正常；手机端离线建过任务后才会出现。';
+      report.localDb = empty; renderDb(empty); return empty;
+    }
+    const db = await openLocalDb();
+    if (!db) {
+      empty.note = 'ddl-local 打不开（可能被浏览器隐私策略拦截）。';
+      report.localDb = empty; renderDb(empty); return empty;
+    }
+    const stores = {};
+    for (const name of ['listGroups', 'lists', 'tags', 'tasks', 'meta']) {
+      const rows = await readStore(db, name);
+      stores[name] = rows === null ? '无此 store' : rows.length + ' 条';
+    }
+    // meta store 没有 keyPath，值里不含键名，必须把 getAllKeys 与 getAll 配对
+    const metaPairs = await new Promise((resolve) => {
+      if (!db.objectStoreNames.contains('meta')) return resolve([]);
+      try {
+        const tx = db.transaction('meta', 'readonly');
+        const store = tx.objectStore('meta');
+        const keysReq = store.getAllKeys();
+        const valuesReq = store.getAll();
+        tx.oncomplete = () => {
+          const keys = keysReq.result || [];
+          const values = valuesReq.result || [];
+          resolve(keys.map((key, index) => [String(key), values[index]]));
+        };
+        tx.onerror = () => resolve([]);
+      } catch { resolve([]); }
+    });
+    const meta = {};
+    for (const [key, value] of metaPairs) {
+      meta[key] = Array.isArray(value) ? value.length + ' 项' : String(value);
+    }
+    try { db.close(); } catch { /* ignore */ }
+    const result = { available: true, exists: true, stores, meta, note: '这是本机浏览器/应用的数据，和已安装 App 内的 WebView 存储相互独立。' };
+    report.localDb = result; renderDb(result); return result;
+  }
+  function renderDb(data) {
+    const items = [];
+    items.push(['IndexedDB', data.available ? '可用' : '不可用']);
+    items.push(['ddl-local 存在', data.exists ? '是' : '否']);
+    for (const [k, v] of Object.entries(data.stores || {})) items.push([k, v]);
+    for (const [k, v] of Object.entries(data.meta || {})) items.push(['meta.' + k, v]);
+    $('dbGrid').innerHTML = items.map(([k, v]) => '<div class="kv"><b>' + esc(k) + '</b><span>' + esc(v) + '</span></div>').join('');
+    $('dbNote').textContent = data.note || '';
+  }
+
+  function appUrl(view, width) {
+    const url = new URL('./', location.href);
+    url.searchParams.set('view', view);
+    url.searchParams.set('diag', '1');
+    if ($('localFirst').checked) url.searchParams.set('localfirst', '1');
+    url.searchParams.set('_w', String(width));
+    return url.toString();
+  }
+  function inspectFrame(frame, view) {
+    let doc, win;
+    try { doc = frame.contentDocument; win = frame.contentWindow; } catch (error) {
+      return { view, status: 'bad', reason: 'iframe 跨域，无法读取 DOM：' + error.message };
+    }
+    if (!doc) {
+      return {
+        view, status: 'bad',
+        reason: '读不到页面 DOM：服务端仍在返回 X-Frame-Options: DENY。请重新双击 start-lan.bat 重启服务（会加载已修复的 SAMEORIGIN 头）后再测。',
+      };
+    }
+    const root = doc.querySelector('#root > div');
+    const main = doc.querySelector('main');
+    const text = (main?.innerText || '').replace(/\s+/g, ' ').trim();
+    // 只认「页面级」故障；RSS 抓取失败等业务提示属于正常数据展示，不算页面构建失败
+    const errorPattern = /无法连接服务|服务器内部错误|Cannot read|加载失败|请求失败|返回了非 JSON|net::|INVALID_RESPONSE/;
+    const redTexts = [...doc.querySelectorAll('main [class*="bg-red-50"], main [class*="text-red-600"]')]
+      .map((node) => (node.textContent || '').trim()).filter((t) => errorPattern.test(t));
+    const jsErrors = (win.__ddlErrors || []).slice(0, 3);
+    const skeleton = doc.querySelectorAll('main .animate-pulse').length;
+    const overflow = doc.documentElement.scrollWidth - doc.documentElement.clientWidth;
+    const dayCells = doc.querySelectorAll('main .grid.grid-cols-7 > div').length;
+    const listRows = doc.querySelectorAll('main li').length;
+    const layout = root?.getAttribute('data-layout') || '—';
+    const dataView = root?.getAttribute('data-view') || '—';
+    const reasons = [];
+    if (!main || text.length === 0) reasons.push('内容区为空');
+    if (redTexts.length) reasons.push('错误横幅：' + redTexts[0].slice(0, 60));
+    if (jsErrors.length) reasons.push('JS 异常：' + jsErrors[0]);
+    if (skeleton > 3) reasons.push('一直停在骨架屏');
+    if (overflow > 2) reasons.push('横向溢出 ' + overflow + 'px');
+    if (dataView !== view) reasons.push('视图未生效（' + dataView + '）');
+    if (view === 'calendar' && dayCells < 35) reasons.push('日期格只有 ' + dayCells + ' 个');
+    if (view !== 'calendar' && text.length < 25) reasons.push('内容明显偏少');
+    const status = reasons.length ? (jsErrors.length || redTexts.length ? 'bad' : 'warn') : 'ok';
+    return {
+      view, status, layout, dataView, chars: text.length, dayCells, listRows,
+      overflow, skeleton, redTexts, jsErrors,
+      reason: reasons.length ? reasons.join('；') : '结构完整、无错误横幅、无运行时异常',
+    };
+  }
+  async function loadHiddenFrame(view, width, height) {
+    const frame = document.createElement('iframe');
+    frame.className = 'offscreen';
+    frame.style.width = width + 'px';
+    frame.style.height = height + 'px';
+    frame.setAttribute('data-diag-view', view);
+    document.body.appendChild(frame);
+    const loaded = new Promise((resolve) => frame.addEventListener('load', resolve, { once: true }));
+    frame.src = appUrl(view, width);
+    await Promise.race([loaded, sleep(9000)]);
+    await sleep(1600);
+    let result;
+    try { result = inspectFrame(frame, view); }
+    catch (error) { result = { view, status: 'bad', reason: '检测异常：' + error.message }; }
+    frame.remove();
+    return result;
+  }
+  async function runViews() {
+    // 先判明「打开方式」：静态预览 / 旧服务进程都会让 13 个 iframe 全部失败，
+    // 那是环境问题不是应用问题，此时只给一条可操作的提示，不再刷满屏红字。
+    const pf = await preflight();
+    report.preflight = pf;
+    if (!pf.serverOk || !pf.frameAllowed) {
+      blockViews(pf);
+      return [];
+    }
+    hideBanner();
+    const selected = $('widthSelect').value;
+    // 与应用的 useLayoutMode / CSS 媒体查询保持一致：用 innerWidth，不要用会扣掉滚动条的 clientWidth
+    const width = selected === 'auto' ? window.innerWidth : Number(selected);
+    const height = width < 700 ? 844 : 900;
+    const rows = [];
+    $('viewBody').innerHTML = VIEWS.map(([v, label]) => '<tr><td>' + esc(label) + '</td><td colspan="6">等待检测…</td></tr>').join('');
+    for (let i = 0; i < VIEWS.length; i += 1) {
+      const [view, label] = VIEWS[i];
+      const r = await loadHiddenFrame(view, width, height);
+      r.label = label;
+      r.width = width;
+      rows.push(r);
+      $('viewBody').innerHTML = rows.map((x) =>
+        '<tr><td>' + esc(x.label || x.view) + '</td><td>' + esc(x.layout || '—') + '</td><td>' +
+        pill(x.status, x.status === 'ok' ? '通过' : x.status === 'warn' ? '注意' : '失败') +
+        '</td><td>' + (x.chars ?? '—') + ' 字 / ' + (x.listRows ?? '—') + ' 行</td><td>' + (x.dayCells ?? '—') +
+        '</td><td>' + (x.overflow ?? '—') + '</td><td>' + esc(x.reason) + '</td></tr>'
+      ).join('') + VIEWS.slice(i + 1).map(([, l]) => '<tr><td>' + esc(l) + '</td><td colspan="6">等待检测…</td></tr>').join('');
+      setProgress((i + 1) / (VIEWS.length + 2));
+    }
+    report.views = rows;
+    const ok = rows.filter((r) => r.status === 'ok').length;
+    const warn = rows.filter((r) => r.status === 'warn').length;
+    const bad = rows.filter((r) => r.status === 'bad').length;
+    $('viewSummary').innerHTML =
+      '<div><b style="color:var(--ok)">' + ok + '</b>通过</div>' +
+      '<div><b style="color:var(--warn)">' + warn + '</b>注意</div>' +
+      '<div><b style="color:var(--bad)">' + bad + '</b>失败</div>' +
+      '<div><b>' + width + 'px</b>检测宽度 / ' + esc(layoutOf(width)) + '</div>' +
+      '<div><b>' + ($('localFirst').checked ? '本地优先' : '直连') + '</b>数据模式</div>';
+    return rows;
+  }
+
+  function renderFrames() {
+    const pf = report.preflight;
+    if (pf && (!pf.serverOk || !pf.frameAllowed)) {
+      $('frames').innerHTML =
+        '<div class="note" style="padding:16px;border:1px dashed var(--line);border-radius:9px">' +
+        '三档预览同样依赖同源 iframe 加载应用，请先按顶部横幅修正打开方式，再点「刷新预览」。</div>';
+      return;
+    }
+    const view = $('previewView').value;
+    const host = $('frames');
+    host.innerHTML = PRESETS.map((p) =>
+      '<div class="frame-card"><div class="frame-head"><b>' + p.label + ' ' + p.width + '×' + p.height +
+      '</b><span data-state="' + p.key + '" class="pill idle">加载中</span></div>' +
+      '<div class="frame-wrap" style="height:300px" data-wrap="' + p.key + '"></div></div>'
+    ).join('');
+    for (const p of PRESETS) {
+      const wrap = host.querySelector('[data-wrap="' + p.key + '"]');
+      const scale = Math.min(0.38, (wrap.clientWidth || 260) / p.width);
+      wrap.style.height = Math.round(p.height * scale) + 'px';
+      const frame = document.createElement('iframe');
+      frame.style.width = p.width + 'px';
+      frame.style.height = p.height + 'px';
+      frame.style.transform = 'scale(' + scale + ')';
+      frame.src = appUrl(view, p.width);
+      frame.addEventListener('load', () => {
+        setTimeout(() => {
+          const badge = host.querySelector('[data-state="' + p.key + '"]');
+          try {
+            const doc = frame.contentDocument;
+            const layout = doc.querySelector('#root > div')?.getAttribute('data-layout') || '—';
+            const over = doc.documentElement.scrollWidth - doc.documentElement.clientWidth;
+            badge.className = 'pill ' + (layout === p.key && over <= 2 ? 'ok' : 'warn');
+            badge.textContent = layout + ' · 溢出 ' + over + 'px';
+          } catch { badge.className = 'pill bad'; badge.textContent = '无法读取'; }
+        }, 1500);
+      }, { once: true });
+      wrap.appendChild(frame);
+    }
+  }
+
+  async function runAll() {
+    const buttons = [$('runAll'), $('runNet'), $('runViews'), $('refreshFrames')];
+    buttons.forEach((b) => { b.disabled = true; });
+    setProgress(0.02);
+    try {
+      collectEnv();
+      await runNetwork(); setProgress(0.15);
+      await runLocalDb();
+      await runViews(); setProgress(0.92);
+      // iframe 里的本地优先视图可能已经建出 IndexedDB，最后再采一次才准确
+      await runLocalDb();
+      renderFrames(); setProgress(1);
+      report.generatedAt = nowStamp();
+      const pf = report.preflight;
+      report.errors = pf && (!pf.serverOk || !pf.frameAllowed)
+        ? ['打开方式：' + (pf.reason || pf.probe) + '｜正确地址：' + suggestedUrl()]
+        : report.views.filter((v) => v.status !== 'ok').map((v) => v.label + '：' + v.reason);
+    } catch (error) {
+      report.errors.push('检测流程异常：' + (error.message || error));
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+      setTimeout(() => setProgress(0), 1200);
+    }
+  }
+
+  // 支持 ?localfirst=1&width=390 直接预设，方便两端用同一条链接复现同一档配置
+  const pageParams = new URLSearchParams(location.search);
+  if (pageParams.get('localfirst') === '1') $('localFirst').checked = true;
+  const presetWidth = pageParams.get('width');
+  if (presetWidth && $('widthSelect').querySelector('option[value="' + presetWidth + '"]')) {
+    $('widthSelect').value = presetWidth;
+  }
+
+  $('baseInput').value = location.protocol === 'file:' ? 'http://127.0.0.1:3001' : location.origin;
+  $('resetBase').addEventListener('click', () => {
+    $('baseInput').value = location.protocol === 'file:' ? 'http://127.0.0.1:3001' : location.origin;
+    void runNetwork();
+  });
+  $('runAll').addEventListener('click', () => void runAll());
+  $('runNet').addEventListener('click', () => void runNetwork());
+  $('runViews').addEventListener('click', () => void runViews().then(() => setProgress(0)));
+  $('refreshFrames').addEventListener('click', renderFrames);
+  $('widthSelect').addEventListener('change', () => { $('viewBody').innerHTML = '<tr><td colspan="7" class="note">宽度已改变，请重新点「只测页面」</td></tr>'; });
+  $('localFirst').addEventListener('change', () => { $('viewBody').innerHTML = '<tr><td colspan="7" class="note">数据模式已改变，请重新点「只测页面」</td></tr>'; });
+  $('copyBtn').addEventListener('click', async () => {
+    const text = JSON.stringify(report, null, 2);
+    try { await navigator.clipboard.writeText(text); $('copyBtn').textContent = '已复制 ✓'; }
+    catch { $('copyBtn').textContent = '复制失败，请下载报告'; }
+    setTimeout(() => { $('copyBtn').textContent = '复制结果'; }, 2200);
+  });
+  $('downloadBtn').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ddl-diagnostics-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  window.addEventListener('resize', () => collectEnv());
+
+  collectEnv();
+  void runAll();
+})();
+</script>
+</body>
+</html>
