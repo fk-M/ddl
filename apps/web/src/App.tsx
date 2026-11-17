@@ -2,7 +2,7 @@ import { AppSettingsSchema, type AppSettings, type TaskQuery } from '@ddl/shared
 import { AlertCircle, LayoutGrid, List, Menu, Plus, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnniversariesView } from './components/AnniversariesView';
 import { CalendarView } from './components/CalendarView';
 import { CommandPalette } from './components/CommandPalette';
@@ -13,6 +13,7 @@ import { MatrixView } from './components/MatrixView';
 import { QuickAdd } from './components/QuickAdd';
 import { ReminderToasts } from './components/ReminderToasts';
 import { SettingsView } from './components/SettingsView';
+import { UpdateBanner } from './components/UpdateBanner';
 import { Sidebar } from './components/Sidebar';
 import { SourcesView } from './components/SourcesView';
 import { TagsView } from './components/TagsView';
@@ -95,13 +96,15 @@ const NON_TASK_VIEWS = ['calendar', 'sources', 'settings', 'focus', 'habits', 'a
 
 export default function App() {
   // 支持 ?view=calendar 等直达参数，供可视化检测页逐页巡检；正常启动不受影响。
-  const [view, setView] = useState(() => {
+  const initialViewFromUrl = (() => {
     try {
-      return new URLSearchParams(window.location.search).get('view') ?? 'today';
+      return new URLSearchParams(window.location.search).get('view');
     } catch {
-      return 'today';
+      return null;
     }
-  });
+  })();
+  const initialView = initialViewFromUrl ?? 'today';
+  const [view, setView] = useState(initialView);
   const layoutMode = useLayoutMode();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -126,6 +129,23 @@ export default function App() {
     const dispose = applyTheme(settings);
     return dispose;
   }, [settings.themeMode, settings.accentColor]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+   * 「打开后首先显示」：设置是异步取回来的，初始 state 拿不到，
+   * 所以等真实设置到齐后再跳一次。三个前提都要满足才跳：
+   * 1) 还没跳过（ref 只走一次）；2) 没有 ?view= 直达参数；
+   * 3) 用户这一刻还没点过导航（视图仍是初始值），否则会把人从正在看的页面拽走。
+   */
+  const startViewApplied = useRef(false);
+  useEffect(() => {
+    if (startViewApplied.current) return;
+    if (!settingsQuery.data) return;
+    startViewApplied.current = true;
+    if (initialViewFromUrl) return;
+    if (view !== initialView) return;
+    if (settings.startView === view) return;
+    setView(settings.startView);
+  }, [settingsQuery.data, settings.startView, view]);
 
   const listsQuery = useLists();
   const lists = listsQuery.data ?? [];
@@ -492,6 +512,9 @@ export default function App() {
       >
         <Plus className="size-5" />
       </button>
+
+      {/* 有新版本时右下角浮一张卡：写明改了什么，更不更新由用户决定 */}
+      <UpdateBanner />
     </div>
   );
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 列表型小组件左侧的空心圆圈，提示「点这里就完成」 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <stroke
+        android:width="1.2dp"
+        android:color="#D4D4D8" />
+    <solid android:color="#00000000" />
+</shape>

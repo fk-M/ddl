@@ -432,6 +432,28 @@ export function SettingsView({ settings, lists }: Props) {
         {active === 'task' && (
           <Card id="settings-task">
             <SectionTitle>任务与视图</SectionTitle>
+            <div className="mb-3">
+              <Field label="打开应用后首先显示">
+                <select
+                  value={settings.startView}
+                  onChange={(event) =>
+                    patch({ startView: event.target.value as AppSettings['startView'] })
+                  }
+                  className={selectClass}
+                >
+                  <option value="today">今天</option>
+                  <option value="inbox">收件箱</option>
+                  <option value="next7">最近 7 天</option>
+                  <option value="calendar">日历</option>
+                  <option value="matrix">四象限</option>
+                  <option value="all">全部任务</option>
+                </select>
+              </Field>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-neutral-400">
+                下次打开应用时生效。带 <code className="rounded bg-neutral-100 px-1">?view=</code>{' '}
+                参数的链接仍然优先（检测页靠它直达某一页）。
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <Field label="默认清单">
                 <select

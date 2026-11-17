@@ -703,6 +703,13 @@ export const AppSettingsSchema = z.object({
   navOrder: z.array(z.string()).default([]),
   /** 已完成任务的展示方式：隐藏 / 折叠在列表底部 / 直接展开 */
   completedDisplay: z.enum(['hidden', 'collapsed', 'expanded']).default('collapsed'),
+  /**
+   * 打开应用后首先显示的视图。取值与前端 lib/nav.ts 的导航 key 一致，
+   * `?view=` 直达参数优先级更高（检测页靠它逐页巡检）。
+   */
+  startView: z
+    .enum(['today', 'inbox', 'next7', 'calendar', 'matrix', 'all'])
+    .default('today'),
 });
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 export type AppSettingsPatch = Partial<AppSettings>;
@@ -855,3 +862,10 @@ export type SyncPushResult = {
     anniversaries: number;
   };
 };
+
+/* ============================== 信息源解析 ============================== */
+// 纯函数，电脑端与手机端共用同一套解析规则（见 feed.ts 顶部说明）
+export * from './feed';
+
+/* ============================== 竞赛预设 ============================== */
+export * from './presets';

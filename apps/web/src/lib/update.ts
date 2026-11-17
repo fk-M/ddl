@@ -19,7 +19,10 @@ export const GITHUB_REPO: string = import.meta.env.VITE_GITHUB_REPO ?? '';
 
 export type ReleaseInfo = {
   version: string;
+  /** 原始说明文本（GitHub Release body 或 version.json 的 notes 拼接） */
   notes: string;
+  /** 拆成条目的更新要点，界面按列表展示 */
+  highlights: string[];
   publishedAt: string;
   pageUrl: string;
   apkUrl: string | null;
@@ -69,20 +72,46 @@ export function releasePageUrl(version?: string): string {
 
 type Manifest = {
   version?: string;
-  notes?: string;
+  /** 新版本要点：数组最直观；也兼容旧的单个字符串 */
+  notes?: string | string[];
   releasedAt?: string;
   android?: string;
   windows?: string;
 };
 
+/**
+ * 自建更新源（可选）：填一个能直接返回 JSON 的地址（例如自己的服务器 / 对象存储），
+ * 就不用依赖 GitHub。留空时走 GitHub 的 version.json 镜像。
+ */
+const MANIFEST_OVERRIDE: string = import.meta.env.VITE_UPDATE_MANIFEST_URL ?? '';
+
+/** 把 notes 的数组或字符串统一成条目列表 */
+export function toHighlights(notes: string | string[] | undefined): string[] {
+  if (Array.isArray(notes)) {
+    return notes.map((item) => String(item).trim()).filter(Boolean).slice(0, 8);
+  }
+  if (typeof notes !== 'string') return [];
+  return notes
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*·\s]+/, '').replace(/^#+\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
 /** 清单镜像：都带 CORS，且不受 API 限流。按顺序试，第一个成功的就用。 */
 function manifestUrls(): string[] {
-  if (!GITHUB_REPO) return [];
   const bust = `t=${Date.now()}`;
-  return [
-    `https://raw.githubusercontent.com/${GITHUB_REPO}/main/version.json?${bust}`,
-    `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@main/version.json?${bust}`,
-  ];
+  const urls: string[] = [];
+  if (MANIFEST_OVERRIDE) {
+    urls.push(MANIFEST_OVERRIDE.includes('?') ? `${MANIFEST_OVERRIDE}&${bust}` : `${MANIFEST_OVERRIDE}?${bust}`);
+  }
+  if (GITHUB_REPO) {
+    urls.push(
+      `https://raw.githubusercontent.com/${GITHUB_REPO}/main/version.json?${bust}`,
+      `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@main/version.json?${bust}`,
+    );
+  }
+  return urls;
 }
 
 async function fetchManifest(): Promise<Manifest | null> {
@@ -107,9 +136,11 @@ function assetUrl(version: string, fileName: string, manifestName?: string): str
 }
 
 function toReleaseInfo(version: string, manifest?: Manifest): ReleaseInfo {
+  const highlights = toHighlights(manifest?.notes);
   return {
     version,
-    notes: manifest?.notes ?? '',
+    notes: highlights.join('\n'),
+    highlights,
     publishedAt: manifest?.releasedAt ?? '',
     pageUrl: releasePageUrl(version),
     apkUrl: assetUrl(version, `DDL-${version}-android.apk`, manifest?.android),
@@ -148,9 +179,11 @@ async function fetchFromApi(): Promise<ReleaseInfo | null> {
   const pick = (pattern: RegExp) =>
     assets.find((asset) => pattern.test(asset.name ?? ''))?.browser_download_url ?? null;
 
+  const highlights = toHighlights(json.body ?? '');
   return {
     version,
-    notes: json.body ?? '',
+    notes: highlights.join('\n'),
+    highlights,
     publishedAt: json.published_at ?? '',
     pageUrl: json.html_url ?? releasePageUrl(version),
     apkUrl: pick(/\.apk$/i),
@@ -167,7 +200,7 @@ export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
 }
 
 export async function checkForUpdate(): Promise<UpdateCheck> {
-  if (!GITHUB_REPO) {
+  if (!GITHUB_REPO && !MANIFEST_OVERRIDE) {
     return { status: 'unsupported', reason: '尚未配置更新源（VITE_GITHUB_REPO）' };
   }
   const latest = await fetchLatestRelease();
@@ -201,4 +234,35 @@ export function isNativeApp(): boolean {
 
 export function isDesktopApp(): boolean {
   return typeof window !== 'undefined' && Boolean((window as { ddlDesktop?: unknown }).ddlDesktop);
+}
+
+/* ============================== 「稍后再说」的记忆 ============================== */
+
+const DISMISS_KEY = 'ddl.update.dismissed';
+
+type DismissRecord = { version: string; until: number };
+
+/**
+ * 用户点过「稍后」的版本，在有效期内不再弹提醒。
+ * days = 0 表示这一版永久忽略（直到下一个版本再提醒）。
+ */
+export function dismissUpdate(version: string, days = 3): void {
+  try {
+    const until = days > 0 ? Date.now() + days * 86_400_000 : Number.MAX_SAFE_INTEGER;
+    localStorage.setItem(DISMISS_KEY, JSON.stringify({ version, until } satisfies DismissRecord));
+  } catch {
+    // 隐私模式下不可写，忽略即可（最坏就是每次启动都提醒一次）
+  }
+}
+
+export function isUpdateDismissed(version: string): boolean {
+  try {
+    const raw = localStorage.getItem(DISMISS_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as DismissRecord;
+    if (!parsed || parsed.version !== version) return false;
+    return Number.isFinite(parsed.until) && Date.now() < parsed.until;
+  } catch {
+    return false;
+  }
 }

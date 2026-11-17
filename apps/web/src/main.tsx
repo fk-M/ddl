@@ -40,9 +40,11 @@ window.addEventListener(SYNC_DATA_EVENT, () => {
 const isDiagnosticsProbe = new URLSearchParams(window.location.search).get('diag') === '1';
 if (!isDiagnosticsProbe) startSyncEngine();
 
-// 桌面小部件是同一份前端资源里的另一屏（Electron 用独立无边框窗口加载 ?widget=1），
+// 桌面小部件是同一份前端资源里的另一屏。
+// Electron 用独立无边框窗口加载 ?widget=<kind>&wid=<实例id>：kind 决定画哪一块
+// （quadrant / today / inbox / next7），同一类型可以同时开多块，所以还要带实例 id。
 // 共用 QueryClient 缓存，不额外增加打包体积。
-const isWidget = new URLSearchParams(window.location.search).get('widget') === '1';
+const isWidget = new URLSearchParams(window.location.search).has('widget');
 if (isWidget) document.documentElement.dataset.surface = 'widget';
 
 // PWA 离线壳：只在生产构建里注册，避免 dev 的 HMR 被缓存住。

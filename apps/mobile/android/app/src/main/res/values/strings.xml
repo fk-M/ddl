@@ -4,6 +4,14 @@
     <string name="title_activity_main">截止日</string>
     <string name="package_name">com.ddl.app</string>
     <string name="custom_url_scheme">com.ddl.app</string>
-    <string name="widget_description">今日待办与最近纪念日</string>
-    <string name="widget_label">截止日 · 今天</string>
+
+    <!-- 桌面小组件：四种类型各自独立，可同时放到桌面上 -->
+    <string name="widget_description">重要紧急四象限，点一下直接完成</string>
+    <string name="widget_label">截止日 · 四象限</string>
+    <string name="widget_description_today">今天到期和已逾期的任务，点一下直接完成</string>
+    <string name="widget_label_today">截止日 · 今天</string>
+    <string name="widget_description_inbox">还没归类到清单里的任务</string>
+    <string name="widget_label_inbox">截止日 · 收件箱</string>
+    <string name="widget_description_next7">未来一周要交的东西</string>
+    <string name="widget_label_next7">截止日 · 最近 7 天</string>
 </resources>

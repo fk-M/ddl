@@ -16,12 +16,15 @@ contextBridge.exposeInMainWorld('ddlDesktop', {
   },
 });
 
-// 桌面小部件（独立无边框窗口）的控制接口；主窗口和窗口本身都用这一份
+// 桌面小部件（独立无边框窗口）的控制接口；主窗口和窗口本身都用这一份。
+// 可以同时存在多块，所以除了 open(kind) 之外，关闭/置顶都按实例 id 走。
 contextBridge.exposeInMainWorld('widget', {
-  open: () => ipcRenderer.invoke('ddl:widget:open'),
-  close: () => ipcRenderer.invoke('ddl:widget:close'),
-  isOpen: () => ipcRenderer.invoke('ddl:widget:is-open'),
+  open: (kind) => ipcRenderer.invoke('ddl:widget:open', kind),
+  close: (id) => ipcRenderer.invoke('ddl:widget:close', id),
+  closeKind: (kind) => ipcRenderer.invoke('ddl:widget:close-kind', kind),
+  closeAll: () => ipcRenderer.invoke('ddl:widget:close-all'),
+  list: () => ipcRenderer.invoke('ddl:widget:list'),
   focusMain: () => ipcRenderer.invoke('ddl:widget:focus-main'),
-  setPinned: (pinned) => ipcRenderer.invoke('ddl:widget:set-pinned', pinned),
-  getPinned: () => ipcRenderer.invoke('ddl:widget:get-pinned'),
+  setPinned: (id, pinned) => ipcRenderer.invoke('ddl:widget:set-pinned', id, pinned),
+  getPinned: (id) => ipcRenderer.invoke('ddl:widget:get-pinned', id),
 });

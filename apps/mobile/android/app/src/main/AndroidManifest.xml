@@ -46,7 +46,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- 桌面小组件：今日待办 + 最近纪念日 -->
+        <!--
+          桌面小组件：四种类型各一个 receiver。
+          Android 的「小组件选择器」按 receiver 列出条目，所以用户能分别添加；
+          同一种类型也可以重复添加到桌面（系统本身就是多实例）。
+        -->
         <receiver
             android:name=".DdlWidgetProvider"
             android:exported="false"
@@ -57,6 +61,42 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/ddl_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".DdlWidgetToday"
+            android:exported="false"
+            android:label="@string/widget_label_today">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ddl_widget_today" />
+        </receiver>
+
+        <receiver
+            android:name=".DdlWidgetInbox"
+            android:exported="false"
+            android:label="@string/widget_label_inbox">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ddl_widget_inbox" />
+        </receiver>
+
+        <receiver
+            android:name=".DdlWidgetNext7"
+            android:exported="false"
+            android:label="@string/widget_label_next7">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ddl_widget_next7" />
         </receiver>
     </application>
 

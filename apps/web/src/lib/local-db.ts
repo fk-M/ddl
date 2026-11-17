@@ -19,6 +19,15 @@ export type LocalRow = {
 };
 
 /**
+ * 不参与同步协议的本地表。
+ * 信息源与候选池只跟「这台设备抓了什么」有关，不跟账号走；
+ * 手机端自己抓取时全离线可用，因此单独存放、不并入 SYNC_STORES。
+ */
+export const EXTRA_STORES = ['sources', 'candidates'] as const;
+export type ExtraStore = (typeof EXTRA_STORES)[number];
+export type AnyStore = SyncStore | ExtraStore;
+
+/**
  * 附件单独存放，不参与同步协议：
  * 服务端附件是二进制文件 + 文件系统路径，无法像结构化行一样 LWW 合并；
  * 手机端离线也要能查看，所以直接把 Blob 存进 IndexedDB。
@@ -37,8 +46,11 @@ export type LocalAttachmentRow = {
 };
 
 const DB_NAME = 'ddl-local';
-/** v3：新增 habits / habitLogs / anniversaries 三个同步 store（习惯与纪念日本地化） */
-const DB_VERSION = 3;
+/**
+ * v3：新增 habits / habitLogs / anniversaries 三个同步 store（习惯与纪念日本地化）
+ * v4：新增 sources / candidates（手机端自己抓信息源，不再依赖电脑）
+ */
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -58,6 +70,12 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(ATTACHMENT_STORE)) {
         const attachments = db.createObjectStore(ATTACHMENT_STORE, { keyPath: 'id' });
         attachments.createIndex('taskId', 'taskId', { unique: false });
+      }
+      // v4：信息源与候选池（不进同步协议，纯本机数据）
+      for (const store of EXTRA_STORES) {
+        if (!db.objectStoreNames.contains(store)) {
+          db.createObjectStore(store, { keyPath: 'id' });
+        }
       }
     };
     request.onsuccess = () => {
@@ -80,7 +98,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-export async function getAll<T = LocalRow>(store: SyncStore): Promise<T[]> {
+export async function getAll<T = LocalRow>(store: AnyStore): Promise<T[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readonly');
@@ -90,7 +108,7 @@ export async function getAll<T = LocalRow>(store: SyncStore): Promise<T[]> {
   });
 }
 
-export async function getRow<T = LocalRow>(store: SyncStore, id: string): Promise<T | undefined> {
+export async function getRow<T = LocalRow>(store: AnyStore, id: string): Promise<T | undefined> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readonly');
@@ -100,7 +118,7 @@ export async function getRow<T = LocalRow>(store: SyncStore, id: string): Promis
   });
 }
 
-export async function putRows(store: SyncStore, rows: LocalRow[]): Promise<void> {
+export async function putRows(store: AnyStore, rows: LocalRow[]): Promise<void> {
   if (rows.length === 0) return;
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
@@ -113,7 +131,7 @@ export async function putRows(store: SyncStore, rows: LocalRow[]): Promise<void>
   });
 }
 
-export async function deleteRows(store: SyncStore, ids: string[]): Promise<void> {
+export async function deleteRows(store: AnyStore, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {

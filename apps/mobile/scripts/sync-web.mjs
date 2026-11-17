@@ -25,14 +25,25 @@ export function syncWebAssets() {
   }
   mkdirSync(assetsDir, { recursive: true });
 
-  // 清掉上一次的 hash 文件，避免 APK 里堆积旧包；cordova*.js 在 public 根目录，不会被碰到
+  // 整个 assets 目录都是构建产物（文件名带 hash），直接清空再拷：
+  // 之前只清 index-*，结果 export-file-*、web-* 这些按需 chunk 每打一次包就多留一份。
   for (const name of readdirSync(assetsDir)) {
-    if (/^index-.*\.(js|css)$/.test(name)) rmSync(path.join(assetsDir, name));
+    if (name.startsWith('.')) continue;
+    rmSync(path.join(assetsDir, name), { recursive: true, force: true });
   }
   // 根目录的静态页都要进 APK：index.html 是入口，diagnostics.html 是设置页检测入口
   const rootFiles = readdirSync(webDist).filter((name) =>
     statSync(path.join(webDist, name)).isFile(),
   );
+  // 清掉 dist 里已经不存在、却还留在 assets/public 根目录的旧文件；
+  // cordova*.js / native-bridge.js 是 Capacitor 注入的，不能删
+  for (const name of readdirSync(publicDir)) {
+    if (rootFiles.includes(name)) continue;
+    if (/^(cordova|native-bridge)/.test(name)) continue;
+    if (name === 'assets') continue;
+    const full = path.join(publicDir, name);
+    if (statSync(full).isFile()) rmSync(full, { force: true });
+  }
   for (const name of rootFiles) {
     cpSync(path.join(webDist, name), path.join(publicDir, name));
   }

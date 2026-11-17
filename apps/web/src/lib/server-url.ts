@@ -56,3 +56,34 @@ export function isLocalFirst(): boolean {
     return false;
   }
 }
+
+/**
+ * 真正的手机 App（Android / iOS 原生壳）。
+ *
+ * 注意 `@capacitor/core` 一旦被静态引入就会挂 `window.Capacitor`，桌面 Electron
+ * 和普通浏览器里同样存在，所以 isLocalFirst() 在那里也是 true —— 判断「是不是手机」
+ * 必须看 getPlatform()，不能只看 Capacitor 是否存在。
+ */
+export function isNativeApp(): boolean {
+  if (typeof window === 'undefined') return false;
+  const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
+  const platform = typeof cap?.getPlatform === 'function' ? cap.getPlatform() : '';
+  return platform === 'android' || platform === 'ios';
+}
+
+/**
+ * 信息源 / 候选池只在手机上落本机，桌面端与网页版继续用服务端的采集链路。
+ *
+ * 原因：服务端有后台轮询（COLLECT_TICK_SECONDS）在采集，候选池是「服务端产出、
+ * 客户端确认」的单向流；桌面端也改成读 IndexedDB 的话，会看不到服务端已经采到的
+ * 候选，还会让两边的订阅列表分叉。
+ */
+export function isLocalCollectDevice(): boolean {
+  if (isNativeApp()) return true;
+  // 检测页/网页预览：允许用 ?localfirst=1 复现手机端的本机采集链路
+  try {
+    return new URLSearchParams(window.location.search).get('localfirst') === '1';
+  } catch {
+    return false;
+  }
+}

@@ -3,17 +3,23 @@ import type {
   AppSettings,
   Attachment,
   BatchTaskInput,
+  Candidate,
+  CandidateStatus,
   CheckInInput,
+  ClipExtractResult,
   CreateAnniversaryPayload,
   CreateHabitPayload,
   CreateListGroupPayload,
   CreateListPayload,
+  CreateSourcePayload,
   CreateTagPayload,
   CreateTaskPayload,
   Habit,
   HabitLog,
   HabitStats,
   ListGroup,
+  PresetSource,
+  Source,
   Tag,
   Task,
   TaskList,
@@ -21,6 +27,7 @@ import type {
   UpdateAnniversaryPayload,
   UpdateHabitPayload,
   UpdateListPayload,
+  UpdateSourcePayload,
   UpdateTagPayload,
   UpdateTaskPayload,
 } from '@ddl/shared';
@@ -36,15 +43,22 @@ import {
   putAttachmentRow,
   putRows,
   setMeta,
+  type AnyStore,
   type LocalRow,
   type SyncStore,
 } from './local-db';
 import { AppSettingsSchema } from '@ddl/shared';
 import {
+  COMPETITION_PRESETS,
   CreateAnniversaryInputSchema,
   CreateHabitInputSchema,
+  CreateSourceInputSchema,
+  isWechatSearchUrl,
+  stripHtml,
   habitLogId,
 } from '@ddl/shared';
+import { fetchPageContent, fetchSourceItems, type FeedItem } from './local-collect';
+import { extractByRuleLocal } from './extract-local';
 import { scheduleSync } from './sync-engine';
 
 /** 手机端「本地优先」数据源：所有核心读写落在 IndexedDB，离线完整可用 */
@@ -82,9 +96,10 @@ function priority(value: unknown): 0 | 1 | 2 | 3 {
   return parsed >= 1 && parsed <= 3 ? (Math.floor(parsed) as 1 | 2 | 3) : 0;
 }
 
-async function insert(store: SyncStore, row: LocalRow): Promise<LocalRow> {
+async function insert(store: AnyStore, row: LocalRow, sync = true): Promise<LocalRow> {
   await putRows(store, [row]);
-  scheduleSync();
+  // 信息源/候选池是本机数据，不进同步协议，别让它们触发同步
+  if (sync) scheduleSync();
   return row;
 }
 
@@ -102,9 +117,10 @@ async function patch(
 }
 
 /** 物理删除必须记入待推送墓碑，否则下一轮 pull 会把记录带回来 */
-async function purgeIds(store: SyncStore, ids: string[]): Promise<void> {
+async function purgeIds(store: AnyStore, ids: string[], sync = true): Promise<void> {
   if (ids.length === 0) return;
   await deleteRows(store, ids);
+  if (!sync) return;
   const pending = (await getMeta<string[]>('purgedIds')) ?? [];
   await setMeta('purgedIds', [...new Set([...pending, ...ids])]);
   scheduleSync();
@@ -1335,4 +1351,383 @@ export async function localUpdateAnniversary(
 
 export async function localDeleteAnniversary(id: string): Promise<void> {
   await patch('anniversaries', id, { deletedAt: now() });
+}
+
+/* ============================== 信息源（手机端自己抓） ============================== */
+
+/**
+ * 手机端的信息源与候选池只存在本机 IndexedDB，不参与同步协议：抓取结果与「这台设备
+ * 订阅了什么」强相关，混进账号同步会把两边的候选池搅在一起。
+ *
+ * 抓取走 CapacitorHttp（系统原生 HTTP，不受 CORS 限制），所以手机不连电脑也能用。
+ * 解析规则与抽取逻辑全部来自 @ddl/shared 与 extract-local，与电脑端同口径，
+ * 同一篇文章在两端算出的截止时间一致。
+ */
+
+/** 没有 dueAt、置信度又低于这个阈值的文章不入池，避免产品退化成阅读器（与电脑端同值） */
+const MIN_CANDIDATE_CONFIDENCE = 0.3;
+
+/** 只在本机做去重，不需要密码学强度；也不用 crypto.subtle（老 WebView 里可能没有） */
+function hashKey(input: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    a = Math.imul(a ^ code, 0x01000193) >>> 0;
+    b = Math.imul(b ^ code, 0x85ebca6b) >>> 0;
+  }
+  return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`;
+}
+
+function candidateFingerprint(sourceId: string, key: string): string {
+  return `${sourceId}:${hashKey(key)}`;
+}
+
+function rowToSource(row: LocalRow): Source {
+  return {
+    id: row.id,
+    name: str(row.name, '未命名信息源'),
+    type: str(row.type, 'rss'),
+    url: str(row.url),
+    enabled: bool(row.enabled, true),
+    fetchIntervalMinutes: num(row.fetchIntervalMinutes, 60),
+    lastFetchedAt: nullableStr(row.lastFetchedAt),
+    lastError: nullableStr(row.lastError),
+    createdAt: str(row.createdAt, now()),
+    updatedAt: str(row.updatedAt, now()),
+  };
+}
+
+function rowToCandidate(row: LocalRow, sourceName: string | null): Candidate {
+  const status = str(row.status, 'pending');
+  return {
+    id: row.id,
+    sourceId: nullableStr(row.sourceId),
+    sourceName,
+    title: str(row.title, '未命名'),
+    url: nullableStr(row.url),
+    excerpt: nullableStr(row.excerpt),
+    dueAt: nullableStr(row.dueAt),
+    confidence: num(row.confidence),
+    status: (status === 'accepted' || status === 'dismissed' ? status : 'pending') as CandidateStatus,
+    taskId: nullableStr(row.taskId),
+    createdAt: str(row.createdAt, now()),
+  };
+}
+
+/** 本机数据更新：不动 `_dirty`、不触发同步 */
+async function patchLocal(
+  store: AnyStore,
+  id: string,
+  changes: Record<string, unknown>,
+): Promise<LocalRow | null> {
+  const row = await getRow<LocalRow>(store, id);
+  if (!row) return null;
+  const next: LocalRow = { ...row, ...changes, updatedAt: now() };
+  await putRows(store, [next]);
+  return next;
+}
+
+export async function localSources(): Promise<Source[]> {
+  const rows = await getAll<LocalRow>('sources');
+  return rows.map(rowToSource).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function localCreateSource(payload: CreateSourcePayload): Promise<Source> {
+  const parsed = CreateSourceInputSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? '信息源填写有误');
+  }
+  const input = parsed.data;
+  const existing = (await getAll<LocalRow>('sources')).find(
+    (row) => str(row.url).trim() === input.url,
+  );
+  if (existing) throw new Error('这个地址已经订阅过了');
+
+  const stamp = now();
+  const row: LocalRow = {
+    id: uuid(),
+    name: input.name,
+    type: 'rss',
+    url: input.url,
+    enabled: input.enabled,
+    fetchIntervalMinutes: input.fetchIntervalMinutes,
+    lastFetchedAt: null,
+    lastError: null,
+    createdAt: stamp,
+    updatedAt: stamp,
+  };
+  return rowToSource(await insert('sources', row, false));
+}
+
+export async function localUpdateSource(
+  id: string,
+  payload: UpdateSourcePayload,
+): Promise<Source> {
+  const changes: Record<string, unknown> = {};
+  for (const key of ['name', 'url', 'enabled', 'fetchIntervalMinutes'] as const) {
+    if (payload[key] !== undefined) changes[key] = payload[key];
+  }
+  const row = await patchLocal('sources', id, changes);
+  if (!row) throw new Error('信息源不存在');
+  return rowToSource(row);
+}
+
+export async function localDeleteSource(id: string): Promise<void> {
+  // 候选池跟着源一起清掉，否则会留下一堆「来源已被删除」的孤儿候选
+  const orphans = (await getAll<LocalRow>('candidates'))
+    .filter((row) => str(row.sourceId) === id)
+    .map((row) => row.id);
+  await deleteRows('candidates', orphans);
+  await deleteRows('sources', [id]);
+}
+
+/**
+ * 抓一个信息源：拉取 → 去重 → 规则抽截止时间 → 入候选池。
+ * 计数口径与电脑端一致：total 抓到的条数、added 新入池、skipped 已存在、
+ * filtered 因「没有时间点且置信度不足」被丢弃。
+ */
+export async function localFetchSource(
+  id: string,
+): Promise<{ added: number; total: number; skipped: number; filtered: number }> {
+  const row = await getRow<LocalRow>('sources', id);
+  if (!row) throw new Error('信息源不存在');
+  const source = rowToSource(row);
+  const wechat = isWechatSearchUrl(source.url);
+
+  let items: FeedItem[];
+  try {
+    items = await fetchSourceItems(source.url);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    await patchLocal('sources', id, { lastError: message });
+    throw new Error(`拉取失败：${message}`);
+  }
+
+  const picked = items.slice(0, 30);
+  const existing = new Set(
+    (await getAll<LocalRow>('candidates')).map((item) => str(item.fingerprint)),
+  );
+  const stamp = new Date();
+  let added = 0;
+  let skipped = 0;
+  let filtered = 0;
+
+  for (const item of picked) {
+    const title = (item.title ?? '').trim();
+    if (!title) {
+      skipped += 1;
+      continue;
+    }
+
+    // 关键词检索会翻出几年前的老文章：原文里「7月13日截止」如今会按「下一次发生」
+    // 算成明年，是假截止。文章本身超过 8 个月就直接丢掉（与电脑端一致）。
+    if (wechat && item.isoDate) {
+      const age = stamp.getTime() - new Date(item.isoDate).getTime();
+      if (Number.isFinite(age) && age > 240 * 86_400_000) {
+        filtered += 1;
+        continue;
+      }
+    }
+
+    // 公众号跳转链带一次性 token，每次抓都不同，只能按标题去重
+    const fingerprint = candidateFingerprint(id, wechat ? `wx:${title}` : (item.link ?? title));
+    if (existing.has(fingerprint)) {
+      skipped += 1;
+      continue;
+    }
+    existing.add(fingerprint);
+
+    const content = stripHtml(item.content ?? item.contentSnippet ?? item.summary ?? '');
+    const extraction = await extractByRuleLocal(title, content, stamp);
+    if (!extraction.dueAt && extraction.confidence < MIN_CANDIDATE_CONFIDENCE) {
+      filtered += 1;
+      continue;
+    }
+
+    const createdAt = stamp.toISOString();
+    const candidate: LocalRow = {
+      id: uuid(),
+      sourceId: id,
+      title: title.slice(0, 300),
+      url: item.link ?? null,
+      excerpt: content.slice(0, 300) || null,
+      dueAt: extraction.dueAt ? extraction.dueAt.toISOString() : null,
+      confidence: extraction.confidence,
+      fingerprint,
+      status: 'pending',
+      taskId: null,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    await putRows('candidates', [candidate]);
+    added += 1;
+  }
+
+  await patchLocal('sources', id, { lastFetchedAt: stamp.toISOString(), lastError: null });
+  return { added, total: picked.length, skipped, filtered };
+}
+
+/**
+ * 打开信息源页时顺手补抓几个「到点没抓」的源。
+ * 手机没有常驻后台任务（省电、也躲开系统后台限制），所以改成机会式刷新；
+ * 一次最多 max 个，单个失败只记错误不中断。
+ */
+export async function localRefreshDueSources(max = 3): Promise<number> {
+  const nowMs = Date.now();
+  const rows = await getAll<LocalRow>('sources');
+  const due = rows
+    .map(rowToSource)
+    .filter((source) => {
+      if (!source.enabled) return false;
+      if (!source.lastFetchedAt) return true;
+      const last = new Date(source.lastFetchedAt).getTime();
+      if (!Number.isFinite(last)) return true;
+      return nowMs - last >= source.fetchIntervalMinutes * 60_000;
+    })
+    .slice(0, max);
+
+  let fetched = 0;
+  for (const source of due) {
+    try {
+      await localFetchSource(source.id);
+      fetched += 1;
+    } catch {
+      // 错误已写进 lastError，页面上会显示，这里不打断其他源
+    }
+  }
+  return fetched;
+}
+
+export async function localCandidates(
+  status: CandidateStatus = 'pending',
+  limit = 50,
+): Promise<Candidate[]> {
+  const [rows, sources] = await Promise.all([
+    getAll<LocalRow>('candidates'),
+    getAll<LocalRow>('sources'),
+  ]);
+  const nameById = new Map(sources.map((row) => [row.id, str(row.name)]));
+  return rows
+    .filter((row) => str(row.status, 'pending') === status)
+    .sort((a, b) => str(b.createdAt).localeCompare(str(a.createdAt)))
+    .slice(0, limit)
+    .map((row) => rowToCandidate(row, nameById.get(str(row.sourceId)) ?? null));
+}
+
+export async function localAcceptCandidate(id: string): Promise<{ taskId: string }> {
+  const row = await getRow<LocalRow>('candidates', id);
+  if (!row) throw new Error('候选不存在');
+  if (str(row.status, 'pending') !== 'pending') throw new Error('该候选已处理过');
+
+  const url = nullableStr(row.url);
+  const task = await localCreateTask({
+    title: str(row.title, '未命名任务').slice(0, 500),
+    notes: url ? `来源：${url}` : null,
+    dueAt: nullableStr(row.dueAt),
+  });
+  await patchLocal('candidates', id, { status: 'accepted', taskId: task.id });
+  return { taskId: task.id };
+}
+
+export async function localDismissCandidate(id: string): Promise<void> {
+  await patchLocal('candidates', id, { status: 'dismissed' });
+}
+
+export async function localDismissAllCandidates(): Promise<{ dismissed: number }> {
+  const pending = (await getAll<LocalRow>('candidates')).filter(
+    (row) => str(row.status, 'pending') === 'pending',
+  );
+  if (pending.length === 0) return { dismissed: 0 };
+  const stamp = now();
+  await putRows(
+    'candidates',
+    pending.map((row) => ({ ...row, status: 'dismissed', updatedAt: stamp })),
+  );
+  return { dismissed: pending.length };
+}
+
+/** 竞赛预设源：离线也能展示，已订阅按 url 判定（与电脑端同一份预设表） */
+export async function localSourcePresets(): Promise<PresetSource[]> {
+  const subscribedUrls = new Set((await getAll<LocalRow>('sources')).map((row) => str(row.url)));
+  return COMPETITION_PRESETS.map((preset) => ({
+    key: preset.key,
+    name: preset.name,
+    url: preset.url,
+    description: preset.description,
+    fetchIntervalMinutes: preset.fetchIntervalMinutes,
+    subscribed: subscribedUrls.has(preset.url),
+  }));
+}
+
+export async function localSubscribePreset(key: string): Promise<Source> {
+  const preset = COMPETITION_PRESETS.find((item) => item.key === key);
+  if (!preset) throw new Error('预设源不存在');
+  const existing = (await getAll<LocalRow>('sources')).find(
+    (row) => str(row.url) === preset.url,
+  );
+  if (existing) return rowToSource(existing);
+  return localCreateSource({
+    name: preset.name,
+    url: preset.url,
+    fetchIntervalMinutes: preset.fetchIntervalMinutes,
+  });
+}
+
+/* ------------------------------ 剪藏抽取（本地） ------------------------------ */
+
+const MIN_CLIP_LENGTH = 2;
+
+function looksLikeSingleUrl(text: string): boolean {
+  return /^(https?:\/\/)[^\s]+$/.test(text.trim());
+}
+
+/**
+ * 剪藏：把粘贴的文字或链接识别成一条潜在 DDL。
+ * 与电脑端同一套规则（电脑端还多一层 LLM，手机端不配 Key 就走规则），
+ * 这样断网、没连电脑时「粘贴一段通知→识别截止日期」依然可用。
+ */
+export async function localClipExtract(text: string): Promise<ClipExtractResult> {
+  const trimmed = text.trim();
+  if (trimmed.length < MIN_CLIP_LENGTH) throw new Error('请输入要识别的文字或链接');
+
+  if (looksLikeSingleUrl(trimmed)) {
+    try {
+      const page = await fetchPageContent(trimmed);
+      const extraction = await extractByRuleLocal(page.title || trimmed, page.content);
+      return {
+        title: page.title || trimmed,
+        dueAt: extraction.dueAt ? extraction.dueAt.toISOString() : null,
+        confidence: extraction.confidence,
+        method: extraction.dueAt ? 'rule' : 'none',
+        matchedText: extraction.matchedText,
+        excerpt: page.content.slice(0, 300) || null,
+        fetched: true,
+      };
+    } catch {
+      // 抓不到页面就退化成纯文本识别，至少还能从链接里认出日期
+      const extraction = await extractByRuleLocal(trimmed, '');
+      return {
+        title: trimmed,
+        dueAt: extraction.dueAt ? extraction.dueAt.toISOString() : null,
+        confidence: extraction.confidence,
+        method: extraction.dueAt ? 'rule' : 'none',
+        matchedText: extraction.matchedText,
+        excerpt: null,
+        fetched: false,
+      };
+    }
+  }
+
+  const extraction = await extractByRuleLocal(trimmed, '');
+  const firstLine = trimmed.split('\n')[0] ?? '';
+  return {
+    title: firstLine.trim().slice(0, 200) || trimmed.slice(0, 200),
+    dueAt: extraction.dueAt ? extraction.dueAt.toISOString() : null,
+    confidence: extraction.confidence,
+    method: extraction.dueAt ? 'rule' : 'none',
+    matchedText: extraction.matchedText,
+    excerpt: trimmed.slice(0, 300),
+    fetched: false,
+  };
 }

@@ -8,6 +8,7 @@ import {
   isDesktopApp,
   isNativeApp,
   releasePageUrl,
+  toHighlights,
   type ReleaseInfo,
 } from '../lib/update';
 import { Button, Card, SectionTitle } from './ui';
@@ -82,6 +83,7 @@ export function UpdateCard() {
         setRelease({
           version: result.version ?? '',
           notes: result.notes ?? '',
+          highlights: toHighlights(result.notes),
           publishedAt: '',
           pageUrl: '',
           apkUrl: null,
@@ -217,10 +219,21 @@ export function UpdateCard() {
                     : '打开发布页'}
             </Button>
           </div>
-          {release.notes && (
-            <p className="mt-2 max-h-32 overflow-y-auto text-[12px] leading-relaxed whitespace-pre-wrap text-neutral-500">
-              {release.notes}
-            </p>
+          {release.highlights.length > 0 ? (
+            <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+              {release.highlights.map((line) => (
+                <li key={line} className="flex items-start gap-1.5 text-[12px] leading-relaxed text-neutral-500">
+                  <span className="mt-[6px] size-1 shrink-0 rounded-full bg-neutral-300" />
+                  <span className="min-w-0 flex-1">{line}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            release.notes && (
+              <p className="mt-2 max-h-32 overflow-y-auto text-[12px] leading-relaxed whitespace-pre-wrap text-neutral-500">
+                {release.notes}
+              </p>
+            )
           )}
           <p className="mt-2 text-[11.5px] text-neutral-400">
             {native

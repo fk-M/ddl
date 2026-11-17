@@ -5,6 +5,9 @@ const require = createRequire(import.meta.url);
 // chrono-node 为 CJS 包，ESM 下无法具名导入
 const chrono = require('chrono-node') as typeof import('chrono-node');
 
+// stripHtml 与手机端共用同一份实现（手机端离线自己抓页面时也要清洗 HTML）
+export { stripHtml } from '@ddl/shared';
+
 /** 截止语义关键词：命中则显著提高置信度 */
 const DEADLINE_HINTS = [
   '截止',
@@ -29,20 +32,6 @@ export type ExtractionResult = {
   /** 抽取方式，便于排查 */
   method: 'rule' | 'llm' | 'none';
 };
-
-export function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
 
 const zhCasual =
   (chrono as unknown as { zh?: { casual: typeof chrono.casual } }).zh?.casual ?? chrono.casual;

@@ -171,7 +171,23 @@ jobs:
           fi
           export VERSION
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          node -e 'const fs=require("fs");const v=process.env.VERSION;fs.writeFileSync("version.json",JSON.stringify({version:v,releasedAt:new Date().toISOString(),android:"DDL-"+v+"-android.apk",windows:"DDL-"+v+"-x64.exe"},null,2)+"\n");'
+          # notes 是给 App 内「新版本提醒」用的优化小总结，由发版人在打 tag 前写进 version.json。
+          # 这里只覆盖版本号/时间/文件名，必须原样保留 notes 与其它自定义字段，否则每次发版都会把总结冲掉。
+          node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            let prev = {};
+            try { prev = JSON.parse(fs.readFileSync("version.json", "utf8")); } catch {}
+            const next = {
+              ...prev,
+              version: v,
+              releasedAt: new Date().toISOString(),
+              android: "DDL-" + v + "-android.apk",
+              windows: "DDL-" + v + "-x64.exe",
+            };
+            if (!Array.isArray(next.notes) && typeof next.notes !== "string") delete next.notes;
+            fs.writeFileSync("version.json", JSON.stringify(next, null, 2) + "\n");
+          '
           cat version.json
 
           git config user.name 'github-actions[bot]'

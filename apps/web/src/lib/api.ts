@@ -38,7 +38,7 @@ import type {
   UpdateTaskPayload,
 } from '@ddl/shared';
 import * as local from './local-data';
-import { getServerUrl, isLocalFirst } from './server-url';
+import { getServerUrl, isLocalCollectDevice, isLocalFirst } from './server-url';
 
 export {
   defaultServerUrl,
@@ -456,37 +456,66 @@ export const api = {
     }),
 
   /* ------------------------------ 信息源 ------------------------------ */
-  sources: () => request<Source[]>('/api/sources'),
+  // 手机端自己抓：源与候选池落在 IndexedDB，抓取走 CapacitorHttp（不受 CORS 限制），
+  // 解析/抽取复用 @ddl/shared 的同一套规则，不连电脑也能用。
+  sources: () => (isLocalCollectDevice() ? local.localSources() : request<Source[]>('/api/sources')),
+  /** 手机端机会式刷新：打开信息源页时补抓几个到点没抓的源（桌面/网页端无此概念） */
+  refreshDueSources: (max = 3) =>
+    isLocalCollectDevice() ? local.localRefreshDueSources(max) : Promise.resolve(0),
   createSource: (payload: CreateSourcePayload) =>
-    request<Source>('/api/sources', { method: 'POST', body: JSON.stringify(payload) }),
+    isLocalCollectDevice()
+      ? local.localCreateSource(payload)
+      : request<Source>('/api/sources', { method: 'POST', body: JSON.stringify(payload) }),
   updateSource: (id: string, payload: UpdateSourcePayload) =>
-    request<Source>(`/api/sources/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  deleteSource: (id: string) => request<void>(`/api/sources/${id}`, { method: 'DELETE' }),
+    isLocalCollectDevice()
+      ? local.localUpdateSource(id, payload)
+      : request<Source>(`/api/sources/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteSource: (id: string) =>
+    isLocalCollectDevice()
+      ? local.localDeleteSource(id)
+      : request<void>(`/api/sources/${id}`, { method: 'DELETE' }),
   fetchSource: (id: string) =>
-    request<{ added: number; total: number; skipped: number; filtered: number }>(
-      `/api/sources/${id}/fetch`,
-      { method: 'POST' },
-    ),
+    isLocalCollectDevice()
+      ? local.localFetchSource(id)
+      : request<{ added: number; total: number; skipped: number; filtered: number }>(
+          `/api/sources/${id}/fetch`,
+          { method: 'POST' },
+        ),
 
   candidates: (status: CandidateStatus = 'pending', limit = 50) =>
-    request<Candidate[]>(`/api/candidates?status=${status}&limit=${limit}`),
+    isLocalCollectDevice()
+      ? local.localCandidates(status, limit)
+      : request<Candidate[]>(`/api/candidates?status=${status}&limit=${limit}`),
   acceptCandidate: (id: string) =>
-    request<{ taskId: string }>(`/api/candidates/${id}/accept`, { method: 'POST' }),
+    isLocalCollectDevice()
+      ? local.localAcceptCandidate(id)
+      : request<{ taskId: string }>(`/api/candidates/${id}/accept`, { method: 'POST' }),
   dismissCandidate: (id: string) =>
-    request<void>(`/api/candidates/${id}/dismiss`, { method: 'POST' }),
+    isLocalCollectDevice()
+      ? local.localDismissCandidate(id)
+      : request<void>(`/api/candidates/${id}/dismiss`, { method: 'POST' }),
   dismissAllCandidates: () =>
-    request<{ dismissed: number }>('/api/candidates/dismiss-all', { method: 'POST' }),
+    isLocalCollectDevice()
+      ? local.localDismissAllCandidates()
+      : request<{ dismissed: number }>('/api/candidates/dismiss-all', { method: 'POST' }),
 
   /* --------------------------- 剪藏 / 竞赛预设 --------------------------- */
   clipExtract: (text: string) =>
-    request<ClipExtractResult>('/api/clip/extract', {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    }),
-  sourcePresets: () => request<PresetSource[]>('/api/sources/presets'),
+    isLocalCollectDevice()
+      ? local.localClipExtract(text)
+      : request<ClipExtractResult>('/api/clip/extract', {
+          method: 'POST',
+          body: JSON.stringify({ text }),
+        }),
+  sourcePresets: () =>
+    isLocalCollectDevice()
+      ? local.localSourcePresets()
+      : request<PresetSource[]>('/api/sources/presets'),
   subscribePreset: (key: string) =>
-    request<Source>('/api/sources/presets/subscribe', {
-      method: 'POST',
-      body: JSON.stringify({ key }),
-    }),
+    isLocalCollectDevice()
+      ? local.localSubscribePreset(key)
+      : request<Source>('/api/sources/presets/subscribe', {
+          method: 'POST',
+          body: JSON.stringify({ key }),
+        }),
 };

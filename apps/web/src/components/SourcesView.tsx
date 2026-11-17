@@ -1,7 +1,7 @@
+import { useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Check,
-  CloudOff,
   Link2,
   Loader2,
   MessageSquare,
@@ -10,6 +10,7 @@ import {
   Scissors,
   Trophy,
   Trash2,
+  Wifi,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { wechatKeywordOf, wechatSearchUrl } from '@ddl/shared';
@@ -25,9 +26,9 @@ import {
   useSources,
   useSubscribePreset,
 } from '../hooks/useDdl';
-import { visibleError } from '../lib/api';
+import { api, visibleError } from '../lib/api';
 import { formatDue } from '../lib/datetime';
-import { getServerUrl, isLocalFirst } from '../lib/server-url';
+import { isLocalCollectDevice } from '../lib/server-url';
 
 function relativeTime(iso: string | null): string {
   if (!iso) return '从未抓取';
@@ -117,8 +118,8 @@ function ClipCard() {
           rows={3}
           className="w-full resize-y rounded-lg border border-neutral-200 px-2.5 py-2 text-[13px] outline-none focus:border-neutral-400"
         />
-        <div className="mt-2 flex items-center justify-between">
-          <p className="text-[11.5px] text-neutral-400">
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-neutral-400">
             自动识别截止时间，确认后再生成任务，不会自动污染清单。
           </p>
           <button
@@ -357,64 +358,28 @@ function CompetitionSection() {
 /* ============================== 信息源（原有） ============================== */
 
 /**
- * 手机端提示条：抓取（RSS / 列表页 / 公众号检索 / 剪藏抽取）都必须在电脑上的服务里跑，
- * 手机本地只有 IndexedDB，做不了跨域抓取和解析。没配地址或连不上时把原因讲清，
- * 否则整页卡片都点不动，用户只会觉得「这个功能不能用」。
+ * 手机端说明条。
+ *
+ * 信息源现在由手机自己抓：CapacitorHttp 走系统原生 HTTP（OkHttp / URLSession），
+ * 不受 CORS 限制，所以不连电脑也能抓 RSS / 列表页 / 公众号检索。
+ * 但要讲清两件事：抓取需要手机自己联网；订阅与候选池只存在这台设备上、不参与同步。
  */
-function HubHint({ unreachable }: { unreachable: boolean }) {
-  if (!isLocalFirst()) return null;
-  const base = getServerUrl();
-  // 没填地址 = 手机端根本不带服务端，请求会落到 WebView 的静态资源上，必然失败；
-  // 这种配置缺失要立刻提示，不能等请求超时。
-  if (base && !unreachable) return null;
-
-  const settingsHref = (() => {
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set('view', 'settings');
-      return `${url.pathname}${url.search}`;
-    } catch {
-      return '?view=settings';
-    }
-  })();
-
+function LocalCollectNote() {
+  if (!isLocalCollectDevice()) return null;
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-3">
-      <div className="flex items-start gap-2">
-        <CloudOff className="mt-0.5 size-4 shrink-0 text-amber-600" />
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-amber-900">
-            {base ? '连不上电脑，抓取暂时无法进行' : '抓取需要在电脑上运行'}
-          </p>
-          <p className="mt-1 text-[12px] leading-relaxed text-amber-800/90">
-            {base ? (
-              <>
-                已配置地址 <code className="rounded bg-amber-100 px-1">{base}</code>，
-                但这次没连上。请确认电脑上双击过 <code className="rounded bg-amber-100 px-1">start-lan.bat</code>，
-                且手机和电脑连的是同一个 Wi-Fi。
-              </>
-            ) : (
-              <>
-                信息源抓取、公众号检索、剪藏识别都由电脑上的服务完成，手机端不会自己联网抓。
-                到「设置 → 服务端连接」填写电脑的局域网地址（如{' '}
-                <code className="rounded bg-amber-100 px-1">192.168.1.10</code>），
-                并在电脑上双击 <code className="rounded bg-amber-100 px-1">start-lan.bat</code> 即可。
-              </>
-            )}
-          </p>
-          <a
-            href={settingsHref}
-            className="mt-2 inline-flex h-8 items-center rounded-lg bg-amber-600 px-3 text-[12.5px] font-medium text-white"
-          >
-            去设置服务端地址
-          </a>
-        </div>
-      </div>
+    <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-neutral-50/80 px-3.5 py-2.5">
+      <Wifi className="mt-0.5 size-3.5 shrink-0 text-neutral-400" />
+      <p className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-neutral-500">
+        手机自己联网抓取，<span className="font-medium text-neutral-600">不需要连电脑</span>。
+        打开本页会自动补抓几个到点的源，也可以随时点「抓取」。
+        订阅与候选只存在这台手机上（不参与同步），在电脑上看不到。
+      </p>
     </div>
   );
 }
 
 export function SourcesView() {
+  const queryClient = useQueryClient();
   const sourcesQuery = useSources();
   const candidatesQuery = useCandidates('pending');
   const createSource = useCreateSource();
@@ -428,9 +393,28 @@ export function SourcesView() {
 
   const sources = sourcesQuery.data ?? [];
   const candidates = candidatesQuery.data ?? [];
-  // 手机端 sourcesQuery 失败（未配地址 → WebView 回落 index.html；或配了但连不上）
-  // 时整页功能都不可用，必须把原因讲出来，否则用户只会觉得「这个功能不能用」。
-  const unreachable = isLocalFirst() && sourcesQuery.isError;
+
+  // 手机端没有常驻后台任务（系统会杀），改成打开页面的机会式刷新：
+  // 一次最多 3 个到点的源，抓到的结果直接刷新列表。
+  useEffect(() => {
+    if (!isLocalCollectDevice()) return;
+    let cancelled = false;
+    void api
+      .refreshDueSources(3)
+      .then((fetched) => {
+        if (cancelled || fetched === 0) return;
+        void queryClient.invalidateQueries({ queryKey: ['sources'] });
+        void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+      })
+      .catch(() => {
+        // 补抓失败不该打断页面，单个源的错误已经写进 lastError
+      });
+    return () => {
+      cancelled = true;
+    };
+    // 只在进入页面时跑一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -448,7 +432,7 @@ export function SourcesView() {
 
   return (
     <div className="space-y-6">
-      <HubHint unreachable={unreachable} />
+      <LocalCollectNote />
       <ClipCard />
       <WechatCard />
       <CompetitionSection />

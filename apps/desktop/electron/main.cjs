@@ -1,5 +1,5 @@
 // Electron 主进程：先拉起内嵌的本地服务（Fastify + PGlite），就绪后再打开窗口
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -29,40 +29,80 @@ const resourcesRoot = isDev
 
 let serverProcess = null;
 let mainWindow = null;
-let widgetWindow = null;
 let serverPort = 0;
 let logStream = null;
 
+/**
+ * 桌面小部件可以同时存在多块（每块一个独立窗口），用实例 id 索引。
+ * 同一个类型允许开多块：有人喜欢把「今天」放两块在不同显示器上。
+ * value: { kind, win }
+ */
+const widgetWindows = new Map();
+let widgetSeq = 0;
+
 /* ============================ 桌面小部件状态 ============================ */
 
+/** 每种小部件打开时的默认尺寸；和前端 lib/widget.ts 的 WIDGET_KINDS 保持一致 */
+const WIDGET_SIZES = {
+  quadrant: { width: 380, height: 460 },
+  today: { width: 320, height: 430 },
+  inbox: { width: 320, height: 430 },
+  next7: { width: 320, height: 460 },
+};
+
+function widgetSize(kind) {
+  return WIDGET_SIZES[kind] ?? WIDGET_SIZES.quadrant;
+}
+
 /**
- * 小部件的置顶状态和窗口位置要跨启动记住，存在 userData 下的一个小 JSON 里。
+ * 每一块小部件的种类、位置、尺寸、置顶状态要跨启动记住，存在 userData 下的一个小 JSON 里。
  * 单独存而不塞进数据库：它属于「这台机器的窗口偏好」，不该跟着同步跑到手机上。
+ * 结构：{ windows: [{ id, kind, x, y, width, height, pinned }] }
  */
-const widgetStatePath = () => path.join(app.getPath('userData'), 'widget-window.json');
+const widgetStatePath = () => path.join(app.getPath('userData'), 'widget-windows.json');
 
 function readWidgetState() {
   try {
     const raw = fs.readFileSync(widgetStatePath(), 'utf8');
     const parsed = JSON.parse(raw);
-    return {
-      pinned: Boolean(parsed?.pinned),
-      x: Number.isFinite(parsed?.x) ? parsed.x : undefined,
-      y: Number.isFinite(parsed?.y) ? parsed.y : undefined,
-    };
+    const rows = Array.isArray(parsed?.windows) ? parsed.windows : [];
+    return { windows: rows.filter((row) => row && typeof row.kind === 'string') };
   } catch {
-    return { pinned: false, x: undefined, y: undefined };
+    return { windows: [] };
   }
 }
 
-function writeWidgetState(patch) {
-  const next = { ...readWidgetState(), ...patch };
+function writeWidgetState(windows) {
   try {
-    fs.writeFileSync(widgetStatePath(), JSON.stringify(next));
+    fs.writeFileSync(widgetStatePath(), JSON.stringify({ windows }));
   } catch (error) {
     writeLog(`[widget] 状态保存失败：${error?.message ?? error}\n`);
   }
-  return next;
+}
+
+/** 把当前活着的窗口拍成快照落盘 */
+function persistWidgetState() {
+  const windows = [];
+  for (const [id, entry] of widgetWindows) {
+    const win = entry.win;
+    if (!win || win.isDestroyed()) continue;
+    const [x, y] = win.getPosition();
+    const [width, height] = win.getSize();
+    windows.push({ id, kind: entry.kind, x, y, width, height, pinned: Boolean(entry.pinned) });
+  }
+  writeWidgetState(windows);
+}
+
+/** 上次记录的坐标可能落在已经拔掉的显示器上，救回主屏内 */
+function clampToScreen(x, y, width, height) {
+  try {
+    const area = screen.getDisplayMatching({ x, y, width, height }).workArea;
+    const left = Math.min(Math.max(x, area.x), area.x + Math.max(0, area.width - width));
+    const top = Math.min(Math.max(y, area.y), area.y + Math.max(0, area.height - height));
+    return { x: left, y: top };
+  } catch {
+    return { x, y };
+  }
 }
 
 function writeLog(chunk) {
@@ -181,7 +221,7 @@ function createWindow(port) {
     mainWindow = null;
     // 主窗口关掉就整体退出：留着孤立的小部件会让人找不到入口，
     // 而且内嵌服务一停它也没数据可显示。
-    closeWidgetWindow();
+    closeAllWidgets();
   });
 
   // 站外链接交给系统浏览器，不在应用内开新窗口
@@ -204,25 +244,37 @@ function createWindow(port) {
 }
 
 /**
- * 桌面小部件：无边框透明窗口，加载同一份前端的 ?widget=1 屏。
+ * 桌面小部件：无边框透明窗口，加载同一份前端的 ?widget=<kind> 屏。
  * 不占任务栏、可拖动、默认不置顶（用户点了图钉才置顶）。
+ *
+ * 可以同时存在多块：每块一个独立窗口 + 独立实例 id（wid），
+ * 关闭/置顶/记忆位置都按实例走，互不影响。
  */
-function createWidgetWindow() {
-  if (widgetWindow && !widgetWindow.isDestroyed()) {
-    widgetWindow.show();
-    widgetWindow.focus();
-    return widgetWindow;
-  }
+function createWidgetWindow(kind = 'quadrant', restore = null) {
   if (!serverPort) return null;
 
-  const state = readWidgetState();
-  widgetWindow = new BrowserWindow({
-    width: 320,
-    height: 400,
+  const size = widgetSize(kind);
+  const id = restore?.id ?? `w${(widgetSeq += 1)}-${Date.now().toString(36)}`;
+  const width = Number.isFinite(restore?.width) ? restore.width : size.width;
+  const height = Number.isFinite(restore?.height) ? restore.height : size.height;
+  // 没记录过位置就居中偏右上，避免多块窗口完全重叠
+  const offset = widgetWindows.size * 28;
+  const fallbackX = Math.round((screen.getPrimaryDisplay().workArea.x ?? 0) + 80 + offset);
+  const fallbackY = Math.round((screen.getPrimaryDisplay().workArea.y ?? 0) + 80 + offset);
+  const { x, y } = clampToScreen(
+    Number.isFinite(restore?.x) ? restore.x : fallbackX,
+    Number.isFinite(restore?.y) ? restore.y : fallbackY,
+    width,
+    height,
+  );
+
+  const win = new BrowserWindow({
+    width,
+    height,
+    x,
+    y,
     minWidth: 260,
     minHeight: 220,
-    x: state.x,
-    y: state.y,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -231,7 +283,7 @@ function createWidgetWindow() {
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    alwaysOnTop: state.pinned,
+    alwaysOnTop: Boolean(restore?.pinned),
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -242,53 +294,110 @@ function createWidgetWindow() {
     },
   });
 
-  if (state.pinned) widgetWindow.setAlwaysOnTop(true, 'floating');
-  widgetWindow.setMenuBarVisibility(false);
+  const entry = { kind, win, pinned: Boolean(restore?.pinned) };
+  widgetWindows.set(id, entry);
 
-  widgetWindow.once('ready-to-show', () => widgetWindow.show());
+  if (entry.pinned) win.setAlwaysOnTop(true, 'floating');
+  win.setMenuBarVisibility(false);
+  win.once('ready-to-show', () => win.show());
 
-  const rememberBounds = () => {
-    if (!widgetWindow || widgetWindow.isDestroyed()) return;
-    const [x, y] = widgetWindow.getPosition();
-    writeWidgetState({ x, y });
+  // 拖动/改大小都立刻落盘，异常退出也不会丢
+  let saveTimer = null;
+  const rememberLater = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => persistWidgetState(), 400);
   };
-  widgetWindow.on('moved', rememberBounds);
-  widgetWindow.on('closed', () => {
-    widgetWindow = null;
+  win.on('moved', rememberLater);
+  win.on('resized', rememberLater);
+
+  win.on('closed', () => {
+    widgetWindows.delete(id);
+    persistWidgetState();
   });
 
-  widgetWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  widgetWindow.loadURL(`http://127.0.0.1:${serverPort}/?widget=1`).catch((error) => {
-    writeLog(`[widget] 页面载入失败：${error}\n`);
-  });
-  writeLog('[widget] 小部件窗口已创建\n');
-  return widgetWindow;
+  win
+    .loadURL(`http://127.0.0.1:${serverPort}/?widget=${encodeURIComponent(kind)}&wid=${encodeURIComponent(id)}`)
+    .catch((error) => {
+      writeLog(`[widget] 页面载入失败：${error}\n`);
+    });
+  writeLog(`[widget] 小部件窗口已创建：${id}（${kind}）\n`);
+  return { id, kind };
 }
 
-function closeWidgetWindow() {
-  if (widgetWindow && !widgetWindow.isDestroyed()) {
-    widgetWindow.destroy();
+function closeWidgetWindow(id) {
+  const entry = widgetWindows.get(id);
+  if (!entry) return false;
+  const win = entry.win;
+  widgetWindows.delete(id);
+  if (win && !win.isDestroyed()) win.destroy();
+  persistWidgetState();
+  return true;
+}
+
+function closeWidgetsByKind(kind) {
+  let closed = 0;
+  for (const [id, entry] of Array.from(widgetWindows)) {
+    if (entry.kind !== kind) continue;
+    const win = entry.win;
+    widgetWindows.delete(id);
+    if (win && !win.isDestroyed()) win.destroy();
+    closed += 1;
   }
-  widgetWindow = null;
+  if (closed > 0) persistWidgetState();
+  return closed;
 }
 
-/** 渲染进程（设置页）控制小部件的入口 */
-function setupWidgetIpc() {
-  ipcMain.handle('ddl:widget:is-open', () =>
-    Boolean(widgetWindow && !widgetWindow.isDestroyed()),
-  );
+function closeAllWidgets() {
+  for (const [id, entry] of Array.from(widgetWindows)) {
+    const win = entry.win;
+    widgetWindows.delete(id);
+    if (win && !win.isDestroyed()) win.destroy();
+  }
+  persistWidgetState();
+}
 
-  ipcMain.handle('ddl:widget:open', () => {
-    const win = createWidgetWindow();
-    return Boolean(win);
+/** 启动时把上次还开着的小部件恢复出来（用户没关 = 还想看） */
+function restoreWidgetWindows() {
+  const { windows } = readWidgetState();
+  for (const row of windows) {
+    try {
+      createWidgetWindow(row.kind, row);
+    } catch (error) {
+      writeLog(`[widget] 恢复失败：${error?.message ?? error}\n`);
+    }
+  }
+}
+
+function listWidgetWindows() {
+  const rows = [];
+  for (const [id, entry] of widgetWindows) {
+    if (!entry.win || entry.win.isDestroyed()) continue;
+    rows.push({ id, kind: entry.kind, pinned: Boolean(entry.pinned) });
+  }
+  return rows;
+}
+
+/** 渲染进程（设置页与窗口自身）控制小部件的入口 */
+function setupWidgetIpc() {
+  ipcMain.handle('ddl:widget:list', () => listWidgetWindows());
+
+  ipcMain.handle('ddl:widget:open', (_event, kind) => {
+    const created = createWidgetWindow(typeof kind === 'string' ? kind : 'quadrant');
+    if (created) persistWidgetState();
+    return created;
   });
 
-  ipcMain.handle('ddl:widget:close', () => {
-    closeWidgetWindow();
+  ipcMain.handle('ddl:widget:close', (_event, id) => closeWidgetWindow(id));
+
+  ipcMain.handle('ddl:widget:close-kind', (_event, kind) => closeWidgetsByKind(kind));
+
+  ipcMain.handle('ddl:widget:close-all', () => {
+    closeAllWidgets();
     return true;
   });
 
@@ -300,16 +409,22 @@ function setupWidgetIpc() {
     return true;
   });
 
-  ipcMain.handle('ddl:widget:set-pinned', (_event, pinned) => {
+  ipcMain.handle('ddl:widget:set-pinned', (_event, id, pinned) => {
+    const entry = widgetWindows.get(id);
     const next = Boolean(pinned);
-    if (widgetWindow && !widgetWindow.isDestroyed()) {
-      widgetWindow.setAlwaysOnTop(next, next ? 'floating' : 'normal');
+    if (entry) {
+      entry.pinned = next;
+      if (entry.win && !entry.win.isDestroyed()) {
+        entry.win.setAlwaysOnTop(next, next ? 'floating' : 'normal');
+      }
+      persistWidgetState();
     }
-    writeWidgetState({ pinned: next });
     return next;
   });
 
-  ipcMain.handle('ddl:widget:get-pinned', () => readWidgetState().pinned);
+  ipcMain.handle('ddl:widget:get-pinned', (_event, id) => Boolean(widgetWindows.get(id)?.pinned));
+
+  // 注意：小部件窗口不能调 refreshElectron，这里只暴露只读状态
 }
 
 /** 更新状态推给渲染进程（进度、完成、错误） */
@@ -320,7 +435,17 @@ function sendUpdateEvent(payload) {
 }
 
 function setupUpdaterIpc() {
-  if (!autoUpdater) return;
+  // 没有 autoUpdater（开发态 / 未打包）时也要把 handler 注册上，
+  // 否则渲染进程发来的 checkForUpdate 会以「No handler registered」告警收场。
+  if (!autoUpdater) {
+    ipcMain.handle('ddl:update:check', () => ({
+      status: 'unsupported',
+      message: '开发模式或未配置更新源，不检查更新',
+    }));
+    ipcMain.handle('ddl:update:download', () => ({ ok: false, message: '当前环境不支持自动更新' }));
+    ipcMain.handle('ddl:update:install', () => ({ ok: false }));
+    return;
+  }
 
   autoUpdater.on('download-progress', (progress) => {
     sendUpdateEvent({ type: 'progress', percent: progress.percent });
@@ -372,6 +497,12 @@ function setupUpdaterIpc() {
   });
 }
 
+/** 菜单里开一块新的小部件（同类型可以开多块，位置错开） */
+function openWidgetFromMenu(kind) {
+  const created = createWidgetWindow(kind);
+  if (created) persistWidgetState();
+}
+
 function buildMenu() {
   // 隐藏菜单栏但保留快捷键：刷新 / 缩放 / 开发者工具
   const template = [
@@ -379,9 +510,19 @@ function buildMenu() {
       label: '文件',
       submenu: [
         {
-          label: '打开桌面小部件',
-          accelerator: 'CmdOrCtrl+Shift+D',
-          click: () => createWidgetWindow(),
+          label: '桌面小部件',
+          submenu: [
+            {
+              label: '四象限',
+              accelerator: 'CmdOrCtrl+Shift+D',
+              click: () => openWidgetFromMenu('quadrant'),
+            },
+            { label: '今天', click: () => openWidgetFromMenu('today') },
+            { label: '收件箱', click: () => openWidgetFromMenu('inbox') },
+            { label: '最近 7 天', click: () => openWidgetFromMenu('next7') },
+            { type: 'separator' },
+            { label: '关闭全部小部件', click: () => closeAllWidgets() },
+          ],
         },
         { type: 'separator' },
         { role: 'quit', label: '退出' },
@@ -454,6 +595,8 @@ if (!gotLock) {
       const port = await startServer();
       serverPort = port;
       createWindow(port);
+      // 上次退出时还开着的小部件继续摆出来（用户没关就是还想看）
+      restoreWidgetWindows();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       writeLog(`[app] 启动失败：${message}\n`);

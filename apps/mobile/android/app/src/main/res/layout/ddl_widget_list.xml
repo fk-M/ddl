@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  列表型小组件（今天 / 收件箱 / 最近 7 天）共用一份布局。
+  RemoteViews 不支持动态列表，所以固定放 8 行，多出来的由 DdlWidgetBase 按尺寸设为 gone。
+
+  每一行都是可点的：点一下 = 直接完成（发广播给对应的 provider），
+  所以每行要带 id 并且能单独设置 PendingIntent。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ddl_list_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/ddl_widget_bg"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <!-- 顶部：类型名 + 计数 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/ddl_list_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="今天"
+            android:textColor="#111827"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/ddl_list_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="#6B7280"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="6dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <!-- 行 1 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_1"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView
+                style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_1_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_1_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 2 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_2"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_2_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_2_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 3 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_3"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_3_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_3_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 4 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_4"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_4_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_4_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 5 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_5"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_5_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_5_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 6 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_6"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_6_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_6_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 7 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_7"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_7_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_7_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 行 8 -->
+        <LinearLayout
+            android:id="@+id/ddl_row_8"
+            style="@style/DdlWidgetRow"
+            android:visibility="gone">
+
+            <ImageView style="@style/DdlWidgetRowCheck" />
+
+            <LinearLayout style="@style/DdlWidgetRowText">
+
+                <TextView
+                    android:id="@+id/ddl_row_8_title"
+                    style="@style/DdlWidgetRowTitle" />
+
+                <TextView
+                    android:id="@+id/ddl_row_8_due"
+                    style="@style/DdlWidgetRowDue"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/ddl_list_empty"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="没有待办"
+            android:textColor="#D4D4D4"
+            android:textSize="11sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 底部：最近纪念日 -->
+    <TextView
+        android:id="@+id/ddl_list_footer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text=""
+        android:textColor="#D97706"
+        android:textSize="10sp"
+        android:visibility="gone" />
+</LinearLayout>

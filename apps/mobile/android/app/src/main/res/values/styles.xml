@@ -19,4 +19,64 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+
+    <!-- 桌面小组件里的一条任务：单行省略，够窄才不会把象限撑破 -->
+    <style name="DdlWidgetTask">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">3dp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:textColor">#374151</item>
+        <item name="android:textSize">9.5sp</item>
+    </style>
+
+    <!-- ===== 列表型小组件（今天 / 收件箱 / 最近 7 天）===== -->
+
+    <!-- 一行任务：整行可点 = 直接完成 -->
+    <style name="DdlWidgetRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:paddingLeft">2dp</item>
+        <item name="android:paddingRight">2dp</item>
+    </style>
+
+    <!-- 打勾圆圈：纯视觉提示，点击事件挂在整行上 -->
+    <style name="DdlWidgetRowCheck">
+        <item name="android:layout_width">12dp</item>
+        <item name="android:layout_height">12dp</item>
+        <item name="android:layout_marginEnd">6dp</item>
+        <item name="android:src">@drawable/ddl_widget_check</item>
+        <item name="android:scaleType">fitCenter</item>
+    </style>
+
+    <style name="DdlWidgetRowText">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:orientation">vertical</item>
+    </style>
+
+    <style name="DdlWidgetRowTitle">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:textColor">#374151</item>
+        <item name="android:textSize">11.5sp</item>
+    </style>
+
+    <style name="DdlWidgetRowDue">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">1dp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:textColor">#9CA3AF</item>
+        <item name="android:textSize">9.5sp</item>
+    </style>
 </resources>

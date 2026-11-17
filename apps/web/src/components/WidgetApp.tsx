@@ -1,55 +1,98 @@
-import { CheckCircle2, Hourglass, Loader2, Maximize2, Pin, PinOff, RefreshCw, X } from 'lucide-react';
+import clsx from 'clsx';
+import {
+  CheckCircle2,
+  Clock3,
+  Hourglass,
+  Loader2,
+  Maximize2,
+  Pin,
+  PinOff,
+  Plus,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useAnniversaries, useTasks, useToggleTask } from '../hooks/useDdl';
-import { endOfTodayIso, formatDue, isOverdue } from '../lib/datetime';
+import { useAnniversaries, useCreateTask, useLists, useTasks, useToggleTask, useUpdateTask } from '../hooks/useDdl';
+import { formatDue, isOverdue } from '../lib/datetime';
+import {
+  buildInboxTasks,
+  buildNextDaysTasks,
+  buildQuadrants,
+  buildTodayTasks,
+  findInboxListId,
+  isWidgetKind,
+  widgetKindMeta,
+  type WidgetKind,
+} from '../lib/widget';
 import type { Task } from '@ddl/shared';
 
 /**
- * Windows 悬浮小部件（Electron 独立无边框窗口，?widget=1 加载的就是这一屏）。
+ * Windows 悬浮小部件（Electron 独立无边框窗口）。
  *
- * 只读为主：列出今天（含逾期）最靠前的几条 + 最近一个纪念日倒计时，
- * 点勾可以完成，点「展开」回到主窗口。数据仍走同一个内嵌服务，不需要额外同步。
+ * `?widget=<kind>` 决定显示哪一块：quadrant / today / inbox / next7。
+ * `?wid=<id>` 是这一扇窗口的实例 id —— 同一个类型可以同时开好几块，
+ * 关闭/置顶都要按实例走，否则会误关别的窗口。
+ *
+ * 所有类型都能在卡片里直接操作：点圆圈完成、点时钟推到明天，
+ * 不用点开主界面。
  */
 
 type DesktopBridge = {
   widget?: {
-    close: () => Promise<void>;
-    focusMain: () => Promise<void>;
-    setPinned: (pinned: boolean) => Promise<boolean>;
-    getPinned: () => Promise<boolean>;
+    close: (id: string) => Promise<void>;
+    focusMain: () => Promise<boolean>;
+    setPinned: (id: string, pinned: boolean) => Promise<boolean>;
+    getPinned: (id: string) => Promise<boolean>;
   };
 };
 
 function bridge(): DesktopBridge['widget'] | undefined {
-  return (window as unknown as DesktopBridge).widget;
+  const value = (window as unknown as DesktopBridge).widget;
+  return value && typeof value.getPinned === 'function' ? value : undefined;
 }
 
-/** 今日待办排序：逾期的靠前，其次按截止时间 */
-function todayTasks(tasks: Task[]): Task[] {
-  return [...tasks]
-    .filter((task) => !task.completedAt)
-    .sort((a, b) => {
-      const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
-      const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
-      return aDue - bDue;
-    });
+/** 每个象限最多露出几条，再多就靠「+N」提示去主界面看 */
+const PER_QUADRANT = 3;
+
+function readParams(): { kind: WidgetKind; wid: string } {
+  let kind: WidgetKind = 'quadrant';
+  let wid = '';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('widget');
+    if (isWidgetKind(raw)) kind = raw;
+    wid = params.get('wid') ?? '';
+  } catch {
+    // 取不到就按默认四象限
+  }
+  return { kind, wid };
 }
 
 export function WidgetApp() {
-  const todayFilter = useMemo(() => ({ dueTo: endOfTodayIso(), limit: 100 }), []);
-  const tasksQuery = useTasks(todayFilter);
+  const { kind, wid } = useMemo(readParams, []);
+  const meta = widgetKindMeta(kind);
+
+  const tasksQuery = useTasks(
+    useMemo(() => ({ status: 'pending' as const, kind: 'task' as const, limit: 300 }), []),
+  );
+  const listsQuery = useLists();
   const anniversariesQuery = useAnniversaries();
   const toggle = useToggleTask();
+  const updateTask = useUpdateTask();
+  const createTask = useCreateTask();
 
   const [pinned, setPinned] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState('');
 
   // 主进程持有真实的置顶状态（重启窗口后要一致），进来先对齐一次
   useEffect(() => {
+    if (!wid) return;
     void bridge()
-      ?.getPinned()
+      ?.getPinned(wid)
       .then((value) => setPinned(Boolean(value)));
-  }, []);
+  }, [wid]);
 
   // 小部件长期挂着不点，靠定时刷新保证「今天」的边界和新增任务能跟上
   const refetchTasks = tasksQuery.refetch;
@@ -62,9 +105,19 @@ export function WidgetApp() {
     return () => clearInterval(timer);
   }, [refetchTasks, refetchAnniversaries]);
 
-  const tasks = tasksQuery.data ?? [];
-  const pending = todayTasks(tasks).slice(0, 6);
-  const all = todayTasks(tasks);
+  const tasks = useMemo(() => tasksQuery.data ?? [], [tasksQuery.data]);
+  const inboxListId = useMemo(() => findInboxListId(listsQuery.data), [listsQuery.data]);
+
+  const quadrants = useMemo(() => buildQuadrants(tasks), [tasks]);
+  const listTasks = useMemo(() => {
+    if (kind === 'today') return buildTodayTasks(tasks);
+    if (kind === 'inbox') return buildInboxTasks(tasks, inboxListId);
+    if (kind === 'next7') return buildNextDaysTasks(tasks, 7);
+    return [];
+  }, [kind, tasks, inboxListId]);
+
+  const pendingTotal = tasks.filter((task) => !task.completedAt).length;
+  const headline = kind === 'quadrant' ? pendingTotal : listTasks.length;
 
   const nextAnniversary = useMemo(() => {
     const rows = anniversariesQuery.data ?? [];
@@ -80,8 +133,41 @@ export function WidgetApp() {
     }
   }
 
+  /** 推到明天同一时刻（没有时间的按明晚 23:59），比「删掉重录」省事 */
+  async function handleSnooze(task: Task) {
+    setBusy(task.id);
+    try {
+      const base = task.dueAt ? new Date(task.dueAt) : new Date();
+      base.setDate(base.getDate() + 1);
+      if (!task.dueAt) base.setHours(23, 59, 0, 0);
+      await updateTask.mutateAsync({ id: task.id, patch: { dueAt: base.toISOString() } });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleAdd() {
+    const title = draft.trim();
+    if (!title) {
+      setAdding(false);
+      return;
+    }
+    setBusy('__new__');
+    try {
+      await createTask.mutateAsync({
+        title,
+        listId: kind === 'inbox' ? (inboxListId ?? undefined) : undefined,
+      });
+      setDraft('');
+      setAdding(false);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handlePin() {
-    const next = await bridge()?.setPinned(!pinned);
+    if (!wid) return;
+    const next = await bridge()?.setPinned(wid, !pinned);
     setPinned(Boolean(next));
   }
 
@@ -94,118 +180,253 @@ export function WidgetApp() {
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[12px] font-medium text-neutral-800">{todayLabel()}</p>
-            <p className="mt-0.5 text-[11px] text-neutral-400">
-              {all.length > 0 ? `${all.length} 项待办` : '没有待办，享受一下'}
+            <p className="truncate text-[12px] font-medium text-neutral-800">{meta.name}</p>
+            <p className="mt-0.5 truncate text-[11px] text-neutral-400">
+              {headline > 0 ? `${headline} 项 · ${todayLabel()}` : `空着 · ${todayLabel()}`}
             </p>
           </div>
-        <div className="flex shrink-0 items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <button
-            type="button"
-            title={pinned ? '取消置顶' : '置顶显示'}
-            onClick={() => void handlePin()}
-            className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+          <div
+            className="flex shrink-0 items-center gap-0.5"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            {pinned ? <Pin size={12} /> : <PinOff size={12} />}
-          </button>
-          <button
-            type="button"
-            title="打开主界面"
-            onClick={() => void bridge()?.focusMain()}
-            className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
-          >
-            <Maximize2 size={12} />
-          </button>
-          <button
-            type="button"
-            title="收起（点托盘图标可再打开）"
-            onClick={() => void bridge()?.close()}
-            className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      </header>
+            <button
+              type="button"
+              title="新建任务"
+              onClick={() => setAdding((value) => !value)}
+              className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+            >
+              <Plus size={12} />
+            </button>
+            <button
+              type="button"
+              title={pinned ? '取消置顶' : '置顶显示'}
+              onClick={() => void handlePin()}
+              className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+            >
+              {pinned ? <Pin size={12} /> : <PinOff size={12} />}
+            </button>
+            <button
+              type="button"
+              title="打开主界面"
+              onClick={() => void bridge()?.focusMain()}
+              className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+            >
+              <Maximize2 size={12} />
+            </button>
+            <button
+              type="button"
+              title="关闭这块小部件"
+              onClick={() => void bridge()?.close(wid)}
+              className="grid size-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        </header>
 
-      {/* 待办列表 */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1.5">
-        {tasksQuery.isLoading && (
-          <div className="flex h-full items-center justify-center gap-2 text-[12px] text-neutral-400">
+        {/* 随手加一条，省得为了记一句话去开主界面 */}
+        {adding && (
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-neutral-100 px-2 py-1.5">
+            <input
+              autoFocus
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void handleAdd();
+                if (event.key === 'Escape') {
+                  setDraft('');
+                  setAdding(false);
+                }
+              }}
+              placeholder={kind === 'inbox' ? '记到收件箱…' : '记一条…'}
+              className="h-6 min-w-0 flex-1 rounded border border-neutral-200 px-1.5 text-[11px] outline-none focus:border-neutral-400"
+            />
+            <button
+              type="button"
+              onClick={() => void handleAdd()}
+              disabled={busy === '__new__'}
+              className="h-6 shrink-0 rounded bg-neutral-900 px-2 text-[11px] text-white disabled:opacity-40"
+            >
+              {busy === '__new__' ? <Loader2 className="size-3 animate-spin" /> : '添加'}
+            </button>
+          </div>
+        )}
+
+        {tasksQuery.isLoading ? (
+          <div className="flex flex-1 items-center justify-center gap-2 text-[12px] text-neutral-400">
             <Loader2 className="size-3.5 animate-spin" />
             加载中…
           </div>
-        )}
+        ) : kind === 'quadrant' ? (
+          /* 2×2 四象限 */
+          <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-1.5 p-1.5">
+            {quadrants.map((cell) => (
+              <section
+                key={cell.key}
+                className="flex min-h-0 flex-col rounded-lg border border-neutral-100 bg-neutral-50/60 px-1.5 py-1"
+              >
+                <div className="flex shrink-0 items-center gap-1">
+                  <span className={clsx('size-1.5 shrink-0 rounded-full', cell.dot)} />
+                  <p className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-neutral-600">
+                    {cell.title}
+                  </p>
+                  <span className="shrink-0 text-[10px] tabular-nums text-neutral-400">
+                    {cell.tasks.length}
+                  </span>
+                </div>
 
-        {!tasksQuery.isLoading && pending.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
-            <CheckCircle2 className="size-6 text-emerald-500" />
-            <p className="text-[12px] text-neutral-500">今天清空了</p>
+                <div className="mt-1 min-h-0 flex-1 overflow-hidden">
+                  {cell.tasks.length === 0 ? (
+                    <div className="grid h-full place-items-center">
+                      <span className="text-[10px] text-neutral-300">空了</span>
+                    </div>
+                  ) : (
+                    <ul className="space-y-0.5">
+                      {cell.tasks.slice(0, PER_QUADRANT).map((task) => (
+                        <TaskRow
+                          key={task.id}
+                          task={task}
+                          busy={busy === task.id}
+                          onToggle={() => void handleToggle(task)}
+                        />
+                      ))}
+                      {cell.tasks.length > PER_QUADRANT && (
+                        <li className="text-[9.5px] text-neutral-400">
+                          +{cell.tasks.length - PER_QUADRANT} 条
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : (
+          /* 列表型：今天 / 收件箱 / 最近 7 天 */
+          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+            {listTasks.length === 0 ? (
+              <div className="grid h-full place-items-center">
+                <span className="text-[10.5px] text-neutral-300">
+                  {kind === 'today' ? '今天没有要交的' : kind === 'inbox' ? '收件箱是空的' : '这一周都很空'}
+                </span>
+              </div>
+            ) : (
+              <ul className="space-y-0.5">
+                {listTasks.map((task) => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    busy={busy === task.id}
+                    onToggle={() => void handleToggle(task)}
+                    onSnooze={() => void handleSnooze(task)}
+                    showQuadrantDot
+                  />
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
-        <ul className="space-y-0.5">
-          {pending.map((task) => {
-            const overdue = task.dueAt ? isOverdue(task.dueAt, task.allDay) : false;
-            return (
-              <li key={task.id} className="group flex items-start gap-2 rounded-lg px-1.5 py-1.5 hover:bg-neutral-50">
-                <button
-                  type="button"
-                  title="完成"
-                  onClick={() => void handleToggle(task)}
-                  className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-neutral-300 text-transparent hover:border-emerald-500 hover:text-emerald-500"
-                >
-                  {busy === task.id ? (
-                    <Loader2 className="size-3 animate-spin text-neutral-400" />
-                  ) : (
-                    <CheckCircle2 className="size-3" />
-                  )}
-                </button>
-                <div className="min-w-0 flex-1">
-                  <p className="line-clamp-2 text-[12.5px] leading-snug text-neutral-800">{task.title}</p>
-                  <p className={`mt-0.5 text-[10.5px] ${overdue ? 'text-rose-500' : 'text-neutral-400'}`}>
-                    {task.dueAt ? formatDue(task.dueAt, task.allDay) : '无截止时间'}
-                    {task.priority === 3 && <span className="ml-1 text-rose-500">高</span>}
-                  </p>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-
-      {/* 底部：最近纪念日 + 刷新 */}
-      <footer className="flex shrink-0 items-center gap-2 border-t border-neutral-100 px-3 py-2">
-        {nextAnniversary ? (
-          <p className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-neutral-500">
-            <Hourglass size={11} className="shrink-0 text-amber-500" />
-            <span className="truncate">{nextAnniversary.title}</span>
-            <span className="shrink-0 font-medium text-amber-600">
-              {nextAnniversary.daysUntil === 0 ? '就是今天' : `还有 ${nextAnniversary.daysUntil} 天`}
-            </span>
-          </p>
-        ) : (
-          <p className="min-w-0 flex-1 text-[11px] text-neutral-400">还没设置纪念日</p>
-        )}
-        <button
-          type="button"
-          title="刷新"
-          onClick={() => {
-            void tasksQuery.refetch();
-            void anniversariesQuery.refetch();
-          }}
-          className="grid size-6 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
-        >
-          <RefreshCw size={11} className={tasksQuery.isFetching ? 'animate-spin' : undefined} />
-        </button>
-      </footer>
+        {/* 底部：最近纪念日 + 刷新 */}
+        <footer className="flex shrink-0 items-center gap-2 border-t border-neutral-100 px-3 py-1.5">
+          {nextAnniversary ? (
+            <p className="flex min-w-0 flex-1 items-center gap-1 text-[10.5px] text-neutral-500">
+              <Hourglass size={10} className="shrink-0 text-amber-500" />
+              <span className="truncate">{nextAnniversary.title}</span>
+              <span className="shrink-0 font-medium text-amber-600">
+                {nextAnniversary.daysUntil === 0 ? '就是今天' : `还有 ${nextAnniversary.daysUntil} 天`}
+              </span>
+            </p>
+          ) : (
+            <p className="min-w-0 flex-1 text-[10.5px] text-neutral-400">还没设置纪念日</p>
+          )}
+          <button
+            type="button"
+            title="刷新"
+            onClick={() => {
+              void tasksQuery.refetch();
+              void anniversariesQuery.refetch();
+            }}
+            className="grid size-5 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+          >
+            <RefreshCw size={10} className={tasksQuery.isFetching ? 'animate-spin' : undefined} />
+          </button>
+        </footer>
       </div>
     </div>
   );
 }
 
-/** 顶部标题：`今天 · 11月17日 周二` */
+/** 一行任务：点圆圈完成；列表型还多一个「推到明天」 */
+function TaskRow({
+  task,
+  busy,
+  onToggle,
+  onSnooze,
+  showQuadrantDot = false,
+}: {
+  task: Task;
+  busy: boolean;
+  onToggle: () => void;
+  onSnooze?: () => void;
+  showQuadrantDot?: boolean;
+}) {
+  const overdue = task.dueAt ? isOverdue(task.dueAt, task.allDay) : false;
+  const dot = task.isImportant
+    ? task.isUrgent
+      ? 'bg-rose-500'
+      : 'bg-blue-500'
+    : task.isUrgent
+      ? 'bg-amber-500'
+      : 'bg-neutral-300';
+
+  return (
+    <li className="group flex items-start gap-1 rounded px-0.5 py-0.5 hover:bg-neutral-100/80">
+      <button
+        type="button"
+        title="完成"
+        onClick={onToggle}
+        className="mt-[1px] grid size-3 shrink-0 place-items-center rounded-full border border-neutral-300 text-transparent hover:border-emerald-500 hover:text-emerald-500"
+      >
+        {busy ? (
+          <Loader2 className="size-2 animate-spin text-neutral-400" />
+        ) : (
+          <CheckCircle2 className="size-2" />
+        )}
+      </button>
+      <div className="min-w-0 flex-1">
+        <p className="flex items-center gap-1 text-[10.5px] leading-snug text-neutral-700">
+          {showQuadrantDot && <span className={clsx('size-1 shrink-0 rounded-full', dot)} />}
+          <span className="truncate">{task.title}</span>
+        </p>
+        {task.dueAt && (
+          <p
+            className={clsx(
+              'truncate text-[9.5px] leading-tight',
+              overdue ? 'text-rose-500' : 'text-neutral-400',
+            )}
+          >
+            {formatDue(task.dueAt, task.allDay)}
+          </p>
+        )}
+      </div>
+      {onSnooze && (
+        <button
+          type="button"
+          title="推到明天"
+          onClick={onSnooze}
+          className="mt-[1px] hidden size-3.5 shrink-0 place-items-center rounded text-neutral-300 hover:text-neutral-600 group-hover:grid"
+        >
+          <Clock3 size={9} />
+        </button>
+      )}
+    </li>
+  );
+}
+
+/** 顶部标题：`11月17日 周二` */
 function todayLabel(): string {
   const now = new Date();
   const weekday = now.toLocaleDateString('zh-CN', { weekday: 'short' });
-  return `今天 · ${now.getMonth() + 1}月${now.getDate()}日 ${weekday}`;
+  return `${now.getMonth() + 1}月${now.getDate()}日 ${weekday}`;
 }
