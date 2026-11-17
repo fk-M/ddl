@@ -327,25 +327,48 @@ export const api = {
   deleteSmartList: (id: string) => request<void>(`/api/smart-lists/${id}`, { method: 'DELETE' }),
 
   /* ------------------------------ 习惯 ------------------------------ */
-  habits: (includeArchived = false) => request<Habit[]>(`/api/habits?includeArchived=${includeArchived}`),
+  // 手机端本地优先：习惯与打卡记录落在 IndexedDB，离线可打卡，联网后按 LWW 合并
+  habits: (includeArchived = false) =>
+    isLocalFirst()
+      ? local.localHabits(includeArchived)
+      : request<Habit[]>(`/api/habits?includeArchived=${includeArchived}`),
   createHabit: (payload: CreateHabitPayload) =>
-    request<Habit>('/api/habits', { method: 'POST', body: JSON.stringify(payload) }),
+    isLocalFirst()
+      ? local.localCreateHabit(payload)
+      : request<Habit>('/api/habits', { method: 'POST', body: JSON.stringify(payload) }),
   updateHabit: (id: string, payload: Partial<CreateHabitPayload> & { archived?: boolean }) =>
-    request<Habit>(`/api/habits/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  deleteHabit: (id: string) => request<void>(`/api/habits/${id}`, { method: 'DELETE' }),
+    isLocalFirst()
+      ? local.localUpdateHabit(id, payload)
+      : request<Habit>(`/api/habits/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteHabit: (id: string) =>
+    isLocalFirst()
+      ? local.localDeleteHabit(id)
+      : request<void>(`/api/habits/${id}`, { method: 'DELETE' }),
   checkHabit: (id: string, date: string, status: 'done' | 'skip' = 'done', value = 1) =>
-    request<Habit>(`/api/habits/${id}/check`, {
-      method: 'POST',
-      body: JSON.stringify({ date, status, value }),
-    }),
-  resetHabit: (id: string) => request<void>(`/api/habits/${id}/reset`, { method: 'POST' }),
-  habitStats: (id: string) => request<HabitStats>(`/api/habits/${id}/stats`),
+    isLocalFirst()
+      ? local.localCheckHabit(id, { date, status, value })
+      : request<Habit>(`/api/habits/${id}/check`, {
+          method: 'POST',
+          body: JSON.stringify({ date, status, value }),
+        }),
+  resetHabit: (id: string) =>
+    isLocalFirst()
+      ? local.localResetHabit(id)
+      : request<void>(`/api/habits/${id}/reset`, { method: 'POST' }),
+  habitStats: (id: string) =>
+    isLocalFirst() ? local.localHabitStats(id) : request<HabitStats>(`/api/habits/${id}/stats`),
   habitLogs: (id: string, from?: string) =>
-    request<HabitLog[]>(`/api/habits/${id}/logs${toQuery({ from })}`),
+    isLocalFirst()
+      ? local.localHabitLogs(id, from)
+      : request<HabitLog[]>(`/api/habits/${id}/logs${toQuery({ from })}`),
   habitsToday: () =>
-    request<{ total: number; done: number; items: { id: string; name: string; icon: string; color: string; done: boolean }[] }>(
-      '/api/habits/summary/today',
-    ),
+    isLocalFirst()
+      ? local.localHabitsToday()
+      : request<{
+          total: number;
+          done: number;
+          items: { id: string; name: string; icon: string; color: string; done: boolean }[];
+        }>('/api/habits/summary/today'),
 
   /* ------------------------------ 专注 ------------------------------ */
   focusSessions: (query: { from?: string; to?: string; limit?: number } = {}) =>
@@ -359,12 +382,24 @@ export const api = {
 
   /* ---------------------------- 纪念日 ---------------------------- */
   anniversaries: (includeArchived = false) =>
-    request<Anniversary[]>(`/api/anniversaries?includeArchived=${includeArchived}`),
+    isLocalFirst()
+      ? local.localAnniversaries(includeArchived)
+      : request<Anniversary[]>(`/api/anniversaries?includeArchived=${includeArchived}`),
   createAnniversary: (payload: CreateAnniversaryPayload) =>
-    request<Anniversary>('/api/anniversaries', { method: 'POST', body: JSON.stringify(payload) }),
+    isLocalFirst()
+      ? local.localCreateAnniversary(payload)
+      : request<Anniversary>('/api/anniversaries', { method: 'POST', body: JSON.stringify(payload) }),
   updateAnniversary: (id: string, payload: Partial<CreateAnniversaryPayload> & { archived?: boolean }) =>
-    request<Anniversary>(`/api/anniversaries/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  deleteAnniversary: (id: string) => request<void>(`/api/anniversaries/${id}`, { method: 'DELETE' }),
+    isLocalFirst()
+      ? local.localUpdateAnniversary(id, payload)
+      : request<Anniversary>(`/api/anniversaries/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        }),
+  deleteAnniversary: (id: string) =>
+    isLocalFirst()
+      ? local.localDeleteAnniversary(id)
+      : request<void>(`/api/anniversaries/${id}`, { method: 'DELETE' }),
 
   /* --------------------------- 日历订阅 --------------------------- */
   calendars: () => request<CalendarSub[]>('/api/calendars'),

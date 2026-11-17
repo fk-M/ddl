@@ -1,5 +1,13 @@
 /** 手机端离线本地库：IndexedDB 存同步记录（与服务端 SyncRow 同形） */
-export const SYNC_STORES = ['listGroups', 'lists', 'tags', 'tasks'] as const;
+export const SYNC_STORES = [
+  'listGroups',
+  'lists',
+  'tags',
+  'tasks',
+  'habits',
+  'habitLogs',
+  'anniversaries',
+] as const;
 export type SyncStore = (typeof SYNC_STORES)[number];
 
 export type LocalRow = {
@@ -29,8 +37,8 @@ export type LocalAttachmentRow = {
 };
 
 const DB_NAME = 'ddl-local';
-/** v2：新增 attachments store（v1 只有 4 个同步 store + meta） */
-const DB_VERSION = 2;
+/** v3：新增 habits / habitLogs / anniversaries 三个同步 store（习惯与纪念日本地化） */
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -52,9 +60,22 @@ function openDb(): Promise<IDBDatabase> {
         attachments.createIndex('taskId', 'taskId', { unique: false });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // 另一个标签页/新版本要升级数据库时主动让位，否则升级会一直 blocked，
+      // 表现为所有本地查询永远停在「加载中」（多开标签页时最容易踩到）
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('本地数据库被其他标签页占用'));
+    request.onblocked = () => {
+      // 清掉缓存的连接，让下一次调用重新尝试（对方关闭后会成功升级）
+      dbPromise = null;
+      reject(new Error('本地数据库被其他标签页占用，请关闭多余页面后重试'));
+    };
   });
   return dbPromise;
 }

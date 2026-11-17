@@ -105,6 +105,8 @@ function isVirginSnapshot(snapshot: SyncSnapshot): boolean {
     (snapshot.tasks?.length ?? 0) === 0 &&
     (snapshot.tags?.length ?? 0) === 0 &&
     (snapshot.listGroups?.length ?? 0) === 0 &&
+    (snapshot.habits?.length ?? 0) === 0 &&
+    (snapshot.anniversaries?.length ?? 0) === 0 &&
     (snapshot.lists ?? []).filter((row) => row.isInbox !== true).length === 0
   );
 }
@@ -184,6 +186,9 @@ async function doSync(): Promise<SyncStatus> {
       lists: [],
       tags: [],
       tasks: [],
+      habits: [],
+      habitLogs: [],
+      anniversaries: [],
       purgedIds: (await getMeta<string[]>('purgedIds')) ?? [],
     };
     for (const store of SYNC_STORES) {

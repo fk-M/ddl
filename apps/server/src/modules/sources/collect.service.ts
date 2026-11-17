@@ -3,6 +3,11 @@ import { createRequire } from 'node:module';
 import { BadRequestError, NotFoundError } from '../../lib/errors';
 import { extractDeadline, stripHtml } from '../../lib/extract';
 import { discoverFeedLink, looksLikeSpa, parseHtmlListPage, parseJsonItemList } from '../../lib/html-feed';
+import {
+  isWechatSearchUrl,
+  parseWechatSearchPage,
+  WechatBlockedError,
+} from '../../lib/wechat-search';
 import type { CandidatesRepo } from '../sources/candidates.repo';
 import type { SourcesRepo } from '../sources/sources.repo';
 
@@ -17,6 +22,8 @@ type FeedItem = {
   content?: string;
   contentSnippet?: string;
   summary?: string;
+  /** 公众号检索结果带发布时间，用来丢弃明显过期（截止日早已过去）的老文章 */
+  isoDate?: string;
 };
 type Feed = { title?: string; items?: FeedItem[] };
 
@@ -112,34 +119,64 @@ export function createCollectService(sourcesRepo: SourcesRepo, candidatesRepo: C
     throw new Error('页面里没有可识别的文章链接（需要是文章列表页，而不是详情页或首页）');
   }
 
+  /** 公众号关键词源：走搜狗微信搜索，只解析列表元信息，不抓正文 */
+  async function fetchWechatSearch(source: { url: string; name: string }): Promise<FeedItem[]> {
+    const { body } = await fetchBody(source.url);
+    let items;
+    try {
+      items = parseWechatSearchPage(body);
+    } catch (error) {
+      if (error instanceof WechatBlockedError) throw new BadRequestError(error.message);
+      throw error;
+    }
+    return items.map((item) => ({
+      title: item.title,
+      link: item.link,
+      // 把公众号名拼进正文，规则抽取时「XX大学 教务处」这类线索能提高置信度
+      content: [item.summary, item.account].filter(Boolean).join(' · '),
+      isoDate: item.publishedAt ? item.publishedAt.toISOString() : undefined,
+    }));
+  }
+
   async function fetchSource(sourceId: string): Promise<FetchResult> {
     const source = await sourcesRepo.findById(sourceId);
     if (!source) throw new NotFoundError('信息源不存在');
 
+    const wechat = isWechatSearchUrl(source.url);
     let feed: Feed;
-    try {
-      feed = await parser.parseURL(source.url);
-    } catch (rssError) {
-      // 先别急着报错：地址很可能是 JSON 源 / 无 RSS 的 HTML 列表页，尝试兜底解析
-      const rssMessage = rssError instanceof Error ? rssError.message : '未知错误';
+    if (wechat) {
       try {
-        feed = { title: source.name, items: await fetchFallback(source) };
-      } catch (htmlError) {
-        const htmlMessage = htmlError instanceof Error ? htmlError.message : '未知错误';
-        const message =
-          `RSS 解析失败：${rssMessage}；兜底解析也失败：${htmlMessage}。` +
-          '本应用支持 RSS / Atom 订阅地址、JSON 列表源，或能直接打开的文章列表页';
+        feed = { title: source.name, items: await fetchWechatSearch(source) };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '未知错误';
         await sourcesRepo.markError(sourceId, message);
         throw new BadRequestError(`拉取失败：${message}`);
       }
-    }
-
-    // RSS 通道正常返回但一条都没有：有的站点对非浏览器 UA 返回空内容或错误页，再试一次兜底
-    if ((feed.items?.length ?? 0) === 0) {
+    } else {
       try {
-        feed = { title: source.name, items: await fetchFallback(source) };
-      } catch {
-        // 保留 RSS 的空结果
+        feed = await parser.parseURL(source.url);
+      } catch (rssError) {
+        // 先别急着报错：地址很可能是 JSON 源 / 无 RSS 的 HTML 列表页，尝试兜底解析
+        const rssMessage = rssError instanceof Error ? rssError.message : '未知错误';
+        try {
+          feed = { title: source.name, items: await fetchFallback(source) };
+        } catch (htmlError) {
+          const htmlMessage = htmlError instanceof Error ? htmlError.message : '未知错误';
+          const message =
+            `RSS 解析失败：${rssMessage}；兜底解析也失败：${htmlMessage}。` +
+            '本应用支持 RSS / Atom 订阅地址、JSON 列表源，或能直接打开的文章列表页';
+          await sourcesRepo.markError(sourceId, message);
+          throw new BadRequestError(`拉取失败：${message}`);
+        }
+      }
+
+      // RSS 通道正常返回但一条都没有：有的站点对非浏览器 UA 返回空内容或错误页，再试一次兜底
+      if ((feed.items?.length ?? 0) === 0) {
+        try {
+          feed = { title: source.name, items: await fetchFallback(source) };
+        } catch {
+          // 保留 RSS 的空结果
+        }
       }
     }
 
@@ -156,8 +193,20 @@ export function createCollectService(sourcesRepo: SourcesRepo, candidatesRepo: C
         continue;
       }
 
+      // 关键词检索会翻出几年前的老文章：原文里的「7月13日截止」如今按「下一次发生」
+      // 会被算成明年，属于假截止。文章本身超过 8 个月就直接丢掉。
+      if (wechat && item.isoDate) {
+        const age = now.getTime() - new Date(item.isoDate).getTime();
+        if (Number.isFinite(age) && age > 240 * 86_400_000) {
+          filtered += 1;
+          continue;
+        }
+      }
+
+      // 搜狗跳转链里带一次性 token，每次抓取都不同，用它做指纹会导致同一篇文章反复入库，
+      // 所以公众号源按标题去重
       const fingerprint = createHash('sha256')
-        .update(`${source.id}:${item.link ?? title}`)
+        .update(`${source.id}:${wechat ? `wx:${title}` : (item.link ?? title)}`)
         .digest('hex');
 
       if (await candidatesRepo.existsByFingerprint(fingerprint)) {

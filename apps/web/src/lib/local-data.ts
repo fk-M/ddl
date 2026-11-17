@@ -1,16 +1,25 @@
 import type {
+  Anniversary,
   AppSettings,
   Attachment,
   BatchTaskInput,
+  CheckInInput,
+  CreateAnniversaryPayload,
+  CreateHabitPayload,
   CreateListGroupPayload,
   CreateListPayload,
   CreateTagPayload,
   CreateTaskPayload,
+  Habit,
+  HabitLog,
+  HabitStats,
   ListGroup,
   Tag,
   Task,
   TaskList,
   TaskQuery,
+  UpdateAnniversaryPayload,
+  UpdateHabitPayload,
   UpdateListPayload,
   UpdateTagPayload,
   UpdateTaskPayload,
@@ -31,6 +40,11 @@ import {
   type SyncStore,
 } from './local-db';
 import { AppSettingsSchema } from '@ddl/shared';
+import {
+  CreateAnniversaryInputSchema,
+  CreateHabitInputSchema,
+  habitLogId,
+} from '@ddl/shared';
 import { scheduleSync } from './sync-engine';
 
 /** 手机端「本地优先」数据源：所有核心读写落在 IndexedDB，离线完整可用 */
@@ -806,13 +820,18 @@ export async function localResetSettings(): Promise<AppSettings> {
 
 /** 手机端导出 JSON 备份：结构与服务端 /api/backup/export 对齐，可直接在桌面端导入 */
 export async function localExportJson(): Promise<string> {
-  const [listGroups, lists, tags, tasks, settings] = await Promise.all([
-    getAll('listGroups'),
-    getAll('lists'),
-    getAll('tags'),
-    getAll('tasks'),
-    localGetSettings(),
-  ]);
+  const [listGroups, lists, tags, tasks, habits, habitLogs, anniversaries, settings] =
+    await Promise.all([
+      getAll('listGroups'),
+      getAll('lists'),
+      getAll('tags'),
+      getAll('tasks'),
+      getAll('habits'),
+      getAll('habitLogs'),
+      getAll('anniversaries'),
+      localGetSettings(),
+    ]);
+  const alive = (rows: LocalRow[]) => rows.filter((row) => !row.deletedAt);
   const payload = {
     app: 'ddl',
     exportedAt: new Date().toISOString(),
@@ -820,15 +839,500 @@ export async function localExportJson(): Promise<string> {
     listGroups,
     lists,
     tags,
-    tasks: tasks.filter((task) => !(task as { deletedAt?: string | null }).deletedAt),
+    tasks: alive(tasks),
     templates: [],
-    habits: [],
-    habitLogs: [],
+    habits: alive(habits),
+    habitLogs: alive(habitLogs),
     focusSessions: [],
-    anniversaries: [],
+    anniversaries: alive(anniversaries),
     smartLists: [],
     sources: [],
     settings: Object.entries(settings).map(([key, value]) => ({ key, value })),
   };
   return JSON.stringify(payload, null, 2);
+}
+
+/* ============================== 习惯（本地优先） ============================== */
+
+const DAY_MS = 86_400_000;
+
+function dateKeyOf(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function isoWeekday(date: Date): number {
+  const day = date.getDay();
+  return day === 0 ? 7 : day;
+}
+
+/** 与 apps/server/src/modules/habits 的 isScheduled 保持一致 */
+function habitScheduled(row: LocalRow, date: Date): boolean {
+  const config = (row.freqConfig ?? {}) as {
+    weekDays?: number[];
+    monthDays?: number[];
+    everyNDays?: number;
+  };
+  switch (str(row.freqType, 'daily')) {
+    case 'weekly':
+      return (config.weekDays ?? [1, 2, 3, 4, 5, 6, 7]).includes(isoWeekday(date));
+    case 'monthly':
+      return (config.monthDays ?? [1]).includes(date.getDate());
+    case 'custom': {
+      const gap = Math.max(1, config.everyNDays ?? 1);
+      const start = new Date(str(row.createdAt, now()));
+      const diffDays = Math.floor(
+        (new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() -
+          new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()) /
+          DAY_MS,
+      );
+      return diffDays >= 0 && diffDays % gap === 0;
+    }
+    default:
+      return true;
+  }
+}
+
+/** 连续天数 / 最长连续 / 完成率：逐行照搬服务端 computeStats，保证两端数字一致 */
+function computeHabitStats(row: LocalRow, logs: LocalRow[]): HabitStats {
+  const doneSet = new Set(
+    logs.filter((log) => str(log.status, 'done') === 'done').map((log) => str(log.logDate)),
+  );
+  const skipSet = new Set(
+    logs.filter((log) => str(log.status) === 'skip').map((log) => str(log.logDate)),
+  );
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let currentStreak = 0;
+  for (let offset = 0; offset < 730; offset += 1) {
+    const cursor = new Date(today.getTime() - offset * DAY_MS);
+    if (!habitScheduled(row, cursor)) continue;
+    const key = dateKeyOf(cursor);
+    if (doneSet.has(key)) {
+      currentStreak += 1;
+      continue;
+    }
+    if (skipSet.has(key)) continue;
+    // 今天还没打卡不算断
+    if (offset === 0) continue;
+    break;
+  }
+
+  let bestStreak = 0;
+  let run = 0;
+  let previous: Date | null = null;
+  for (const key of [...doneSet].sort()) {
+    const date = new Date(`${key}T00:00:00`);
+    if (previous) {
+      let continuous = true;
+      const cursor = new Date(previous.getTime() + DAY_MS);
+      while (cursor.getTime() < date.getTime()) {
+        if (habitScheduled(row, cursor) && !doneSet.has(dateKeyOf(cursor))) {
+          continuous = false;
+          break;
+        }
+        cursor.setTime(cursor.getTime() + DAY_MS);
+      }
+      run = continuous ? run + 1 : 1;
+    } else {
+      run = 1;
+    }
+    previous = date;
+    bestStreak = Math.max(bestStreak, run);
+  }
+
+  let scheduled = 0;
+  let done = 0;
+  for (let offset = 0; offset < 30; offset += 1) {
+    const cursor = new Date(today.getTime() - offset * DAY_MS);
+    if (!habitScheduled(row, cursor)) continue;
+    scheduled += 1;
+    if (doneSet.has(dateKeyOf(cursor))) done += 1;
+  }
+
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthCheckIns = logs.filter(
+    (log) =>
+      str(log.status, 'done') === 'done' &&
+      new Date(`${str(log.logDate)}T00:00:00`) >= monthStart,
+  ).length;
+
+  return {
+    totalCheckIns: doneSet.size,
+    currentStreak,
+    bestStreak: Math.max(bestStreak, currentStreak),
+    monthCheckIns,
+    completionRate: scheduled > 0 ? done / scheduled : 0,
+    calendar: logs.map((log) => ({
+      date: str(log.logDate),
+      status: str(log.status) === 'skip' ? ('skip' as const) : ('done' as const),
+      value: num(log.value, 1),
+    })),
+  };
+}
+
+function rowToHabit(row: LocalRow, logs: LocalRow[]): Habit {
+  const stats = computeHabitStats(row, logs);
+  const todayKey = dateKeyOf(new Date());
+  const cutoff = dateKeyOf(new Date(Date.now() - 90 * DAY_MS));
+  return {
+    id: row.id,
+    name: str(row.name, '未命名习惯'),
+    icon: str(row.icon, '✅'),
+    color: str(row.color, '#22c55e'),
+    freqType: str(row.freqType, 'daily') as Habit['freqType'],
+    freqConfig: (row.freqConfig ?? {}) as Habit['freqConfig'],
+    goalPerPeriod: num(row.goalPerPeriod, 1),
+    unit: str(row.unit, '次'),
+    remindAt: nullableStr(row.remindAt),
+    archived: bool(row.archived),
+    sortOrder: num(row.sortOrder),
+    createdAt: str(row.createdAt, now()),
+    updatedAt: str(row.updatedAt, now()),
+    doneToday: logs.some((log) => str(log.logDate) === todayKey && str(log.status, 'done') === 'done'),
+    streak: stats.currentStreak,
+    bestStreak: stats.bestStreak,
+    totalCheckIns: stats.totalCheckIns,
+    completionRate: stats.completionRate,
+    recentDates: logs
+      .filter((log) => str(log.status, 'done') === 'done' && str(log.logDate) >= cutoff)
+      .map((log) => str(log.logDate)),
+  };
+}
+
+async function habitLogRows(habitId?: string): Promise<LocalRow[]> {
+  const rows = (await getAll<LocalRow>('habitLogs')).filter((row) => !row.deletedAt);
+  return habitId ? rows.filter((row) => str(row.habitId) === habitId) : rows;
+}
+
+export async function localHabits(includeArchived = false): Promise<Habit[]> {
+  const rows = (await getAll<LocalRow>('habits')).filter((row) => !row.deletedAt);
+  const logs = await habitLogRows();
+  const byHabit = new Map<string, LocalRow[]>();
+  for (const log of logs) {
+    const key = str(log.habitId);
+    const list = byHabit.get(key) ?? [];
+    list.push(log);
+    byHabit.set(key, list);
+  }
+  return rows
+    .filter((row) => includeArchived || !bool(row.archived))
+    .sort(
+      (a, b) =>
+        num(a.sortOrder) - num(b.sortOrder) ||
+        str(a.createdAt).localeCompare(str(b.createdAt)),
+    )
+    .map((row) => rowToHabit(row, byHabit.get(row.id) ?? []));
+}
+
+export async function localCreateHabit(payload: CreateHabitPayload): Promise<Habit> {
+  const input = CreateHabitInputSchema.parse(payload);
+  const stamp = now();
+  const row: LocalRow = {
+    id: uuid(),
+    name: input.name,
+    icon: input.icon,
+    color: input.color,
+    freqType: input.freqType,
+    freqConfig: input.freqConfig ?? {},
+    goalPerPeriod: input.goalPerPeriod,
+    unit: input.unit,
+    remindAt: input.remindAt ?? null,
+    archived: false,
+    deletedAt: null,
+    sortOrder: input.sortOrder,
+    createdAt: stamp,
+    updatedAt: stamp,
+    _dirty: true,
+  };
+  return rowToHabit(await insert('habits', row), []);
+}
+
+const HABIT_PATCH_FIELDS = [
+  'name',
+  'icon',
+  'color',
+  'freqType',
+  'freqConfig',
+  'goalPerPeriod',
+  'unit',
+  'remindAt',
+  'archived',
+  'sortOrder',
+] as const;
+
+export async function localUpdateHabit(
+  id: string,
+  payload: UpdateHabitPayload,
+): Promise<Habit> {
+  const source = payload as Record<string, unknown>;
+  const changes: Record<string, unknown> = {};
+  for (const key of HABIT_PATCH_FIELDS) {
+    if (source[key] !== undefined) changes[key] = source[key];
+  }
+  const row = await patch('habits', id, changes);
+  if (!row) throw new Error('习惯不存在');
+  return rowToHabit(row, await habitLogRows(id));
+}
+
+export async function localDeleteHabit(id: string): Promise<void> {
+  // 与服务端一致：软删除（保留 deletedAt 让对端也删除），打卡记录同样打墓碑
+  const logs = await habitLogRows(id);
+  await patch('habits', id, { deletedAt: now() });
+  for (const log of logs) await patch('habitLogs', log.id, { deletedAt: now() });
+}
+
+/** 打卡 / 取消打卡 / 改成跳过：同一天再次点同一状态 = 取消 */
+export async function localCheckHabit(id: string, input: CheckInInput): Promise<Habit> {
+  const habit = await getRow<LocalRow>('habits', id);
+  if (!habit || habit.deletedAt) throw new Error('习惯不存在');
+  const date = input.date;
+  const status = input.status ?? 'done';
+  const logs = await habitLogRows(id);
+  const existing = logs.find((log) => str(log.logDate) === date);
+
+  if (existing) {
+    if (str(existing.status, 'done') === status) {
+      await purgeIds('habitLogs', [existing.id]);
+    } else {
+      await patch('habitLogs', existing.id, {
+        status,
+        value: input.value ?? 1,
+        note: input.note ?? null,
+      });
+    }
+  } else {
+    const stamp = now();
+    await insert('habitLogs', {
+      id: habitLogId(id, date),
+      habitId: id,
+      logDate: date,
+      status,
+      value: input.value ?? 1,
+      note: input.note ?? null,
+      createdAt: stamp,
+      updatedAt: stamp,
+      deletedAt: null,
+      _dirty: true,
+    });
+  }
+
+  const next = (await getRow<LocalRow>('habits', id)) ?? habit;
+  return rowToHabit(next, await habitLogRows(id));
+}
+
+export async function localResetHabit(id: string): Promise<void> {
+  const logs = await habitLogRows(id);
+  await purgeIds(
+    'habitLogs',
+    logs.map((log) => log.id),
+  );
+}
+
+export async function localHabitStats(id: string): Promise<HabitStats> {
+  const row = await getRow<LocalRow>('habits', id);
+  if (!row) throw new Error('习惯不存在');
+  return computeHabitStats(row, await habitLogRows(id));
+}
+
+export async function localHabitLogs(id: string, from?: string): Promise<HabitLog[]> {
+  const rows = await habitLogRows(id);
+  return rows
+    .filter((row) => !from || str(row.logDate) >= from)
+    .sort((a, b) => str(a.logDate).localeCompare(str(b.logDate)))
+    .map((row) => ({
+      id: row.id,
+      habitId: str(row.habitId),
+      logDate: str(row.logDate),
+      status: str(row.status) === 'skip' ? ('skip' as const) : ('done' as const),
+      value: num(row.value, 1),
+      note: nullableStr(row.note),
+    }));
+}
+
+export async function localHabitsToday() {
+  const habits = await localHabits(false);
+  const today = new Date();
+  const todayKey = dateKeyOf(today);
+  const scheduled = habits.filter((habit) => {
+    if (habit.archived) return false;
+    return habitScheduled(
+      {
+        id: habit.id,
+        freqType: habit.freqType,
+        freqConfig: habit.freqConfig,
+        createdAt: habit.createdAt,
+        updatedAt: habit.updatedAt,
+      },
+      today,
+    );
+  });
+  return {
+    total: scheduled.length,
+    done: scheduled.filter((habit) => habit.recentDates.includes(todayKey)).length,
+    items: scheduled.map((habit) => ({
+      id: habit.id,
+      name: habit.name,
+      icon: habit.icon,
+      color: habit.color,
+      done: habit.doneToday,
+    })),
+  };
+}
+
+/* ============================== 倒数纪念日（本地优先） ============================== */
+
+function startOfToday(): Date {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
+}
+
+/** 与 apps/server/src/modules/anniversaries 的 decorate 对齐；农历按需动态加载，避免主包变大 */
+async function anniversaryTiming(row: LocalRow): Promise<{ daysUntil: number; years: number }> {
+  const today = startOfToday();
+  const raw = new Date(`${str(row.eventDate)}T00:00:00`);
+  if (Number.isNaN(raw.getTime())) return { daysUntil: 0, years: 0 };
+
+  let nextDate = raw;
+  let years = 0;
+
+  if (bool(row.repeatYearly)) {
+    const lunar = bool(row.lunar);
+    let lunarInfo: { month: number; day: number; isLeap: boolean } | null = null;
+    let convert: ((year: number, month: number, day: number, isLeap: boolean) => Date | null) | null =
+      null;
+
+    if (lunar) {
+      try {
+        const lib = await import('lunar-typescript');
+        const { Lunar, Solar } = lib as unknown as typeof import('lunar-typescript');
+        const fromSolar = Solar.fromYmd(raw.getFullYear(), raw.getMonth() + 1, raw.getDate()).getLunar();
+        const month = fromSolar.getMonth();
+        lunarInfo = { month: Math.abs(month), day: fromSolar.getDay(), isLeap: month < 0 };
+        convert = (year, targetMonth, day, isLeap) => {
+          try {
+            const target = isLeap ? -targetMonth : targetMonth;
+            const targetLunar = Lunar.fromYmd(year, target, day);
+            if (targetLunar.getMonth() !== target || targetLunar.getDay() !== day) return null;
+            const solar = targetLunar.getSolar();
+            return new Date(solar.getYear(), solar.getMonth() - 1, solar.getDay());
+          } catch {
+            return null;
+          }
+        };
+      } catch {
+        lunarInfo = null;
+      }
+    }
+
+    for (let offset = 0; offset <= 3; offset += 1) {
+      let candidate: Date | null;
+      if (lunarInfo && convert) {
+        candidate = convert(today.getFullYear() + offset, lunarInfo.month, lunarInfo.day, lunarInfo.isLeap);
+      } else {
+        candidate = new Date(today.getFullYear() + offset, raw.getMonth(), raw.getDate());
+      }
+      if (!candidate) continue;
+      if (candidate.getTime() >= today.getTime()) {
+        nextDate = candidate;
+        break;
+      }
+    }
+
+    years = Math.max(0, nextDate.getFullYear() - raw.getFullYear());
+  }
+
+  const daysUntil = Math.round((nextDate.getTime() - today.getTime()) / DAY_MS);
+  const type = str(row.type, 'countdown');
+  return { daysUntil, years: type === 'birthday' || type === 'anniversary' ? years : 0 };
+}
+
+async function rowToAnniversary(row: LocalRow): Promise<Anniversary> {
+  const timing = await anniversaryTiming(row);
+  return {
+    id: row.id,
+    title: str(row.title, '未命名纪念日'),
+    eventDate: str(row.eventDate),
+    type: str(row.type, 'countdown') as Anniversary['type'],
+    repeatYearly: bool(row.repeatYearly),
+    lunar: bool(row.lunar),
+    color: str(row.color, '#f97316'),
+    icon: str(row.icon, '🎂'),
+    notes: nullableStr(row.notes),
+    archived: bool(row.archived),
+    sortOrder: num(row.sortOrder),
+    createdAt: str(row.createdAt, now()),
+    updatedAt: str(row.updatedAt, now()),
+    daysUntil: timing.daysUntil,
+    years: timing.years,
+  };
+}
+
+export async function localAnniversaries(includeArchived = false): Promise<Anniversary[]> {
+  const rows = (await getAll<LocalRow>('anniversaries')).filter((row) => !row.deletedAt);
+  const items = await Promise.all(
+    rows
+      .filter((row) => includeArchived || !bool(row.archived))
+      .map((row) => rowToAnniversary(row)),
+  );
+  return items.sort((a, b) => a.daysUntil - b.daysUntil);
+}
+
+export async function localCreateAnniversary(
+  payload: CreateAnniversaryPayload,
+): Promise<Anniversary> {
+  const input = CreateAnniversaryInputSchema.parse(payload);
+  const stamp = now();
+  const row: LocalRow = {
+    id: uuid(),
+    title: input.title,
+    eventDate: input.eventDate,
+    type: input.type,
+    repeatYearly: input.repeatYearly,
+    lunar: input.lunar,
+    color: input.color,
+    icon: input.icon,
+    notes: input.notes ?? null,
+    archived: false,
+    deletedAt: null,
+    sortOrder: input.sortOrder,
+    createdAt: stamp,
+    updatedAt: stamp,
+    _dirty: true,
+  };
+  return rowToAnniversary(await insert('anniversaries', row));
+}
+
+const ANNIVERSARY_PATCH_FIELDS = [
+  'title',
+  'eventDate',
+  'type',
+  'repeatYearly',
+  'lunar',
+  'color',
+  'icon',
+  'notes',
+  'archived',
+  'sortOrder',
+] as const;
+
+export async function localUpdateAnniversary(
+  id: string,
+  payload: UpdateAnniversaryPayload,
+): Promise<Anniversary> {
+  const source = payload as Record<string, unknown>;
+  const changes: Record<string, unknown> = {};
+  for (const key of ANNIVERSARY_PATCH_FIELDS) {
+    if (source[key] !== undefined) changes[key] = source[key];
+  }
+  const row = await patch('anniversaries', id, changes);
+  if (!row) throw new Error('纪念日不存在');
+  return rowToAnniversary(row);
+}
+
+export async function localDeleteAnniversary(id: string): Promise<void> {
+  await patch('anniversaries', id, { deletedAt: now() });
 }

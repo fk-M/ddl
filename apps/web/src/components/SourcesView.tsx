@@ -1,6 +1,18 @@
 import clsx from 'clsx';
-import { Check, Link2, Loader2, Plus, RefreshCw, Scissors, Trophy, Trash2 } from 'lucide-react';
+import {
+  Check,
+  CloudOff,
+  Link2,
+  Loader2,
+  MessageSquare,
+  Plus,
+  RefreshCw,
+  Scissors,
+  Trophy,
+  Trash2,
+} from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
+import { wechatKeywordOf, wechatSearchUrl } from '@ddl/shared';
 import {
   useCandidateActions,
   useCandidates,
@@ -15,6 +27,7 @@ import {
 } from '../hooks/useDdl';
 import { visibleError } from '../lib/api';
 import { formatDue } from '../lib/datetime';
+import { getServerUrl, isLocalFirst } from '../lib/server-url';
 
 function relativeTime(iso: string | null): string {
   if (!iso) return '从未抓取';
@@ -196,6 +209,90 @@ function ClipCard() {
   );
 }
 
+/* ============================== 公众号关键词 ============================== */
+
+const WECHAT_SUGGESTIONS = ['夏令营 报名 截止', '竞赛 报名 截止', '校园招聘 网申 截止', '讲座 报名'];
+
+/**
+ * 公众号没有公开的订阅接口，这里走搜狗微信的公开检索：
+ * 用户填关键词，我们抓「命中关键词的文章列表」，再用规则/模型识别其中的截止时间。
+ * 因此它的语义是「按主题发现」，而不是「订阅某个号」。
+ */
+function WechatCard() {
+  const createSource = useCreateSource();
+  const [keyword, setKeyword] = useState('');
+  const [done, setDone] = useState<string | null>(null);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const value = keyword.trim();
+    if (!value || createSource.isPending) return;
+    createSource.mutate(
+      { name: `公众号 · ${value}`, url: wechatSearchUrl(value) },
+      {
+        onSuccess: () => {
+          setDone(`已添加「${value}」，下方点「立即抓取」就能看到命中的文章`);
+          setKeyword('');
+        },
+      },
+    );
+  }
+
+  return (
+    <section className="rounded-xl border border-neutral-200 bg-white p-3">
+      <div className="flex items-center gap-1.5">
+        <MessageSquare className="size-3.5 text-emerald-600" />
+        <h3 className="text-[13px] font-medium text-neutral-800">公众号文章（关键词检索）</h3>
+      </div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-neutral-400">
+        公众号没有公开的订阅接口，这里用搜狗微信检索按关键词找文章（标题 / 摘要 / 公众号名 /
+        发布时间），再自动识别里面的截止日期。想订阅某个号，就把它的名字或常发主题当关键词。
+      </p>
+
+      <form onSubmit={submit} className="mt-2 flex flex-col gap-2 sm:flex-row">
+        <input
+          value={keyword}
+          onChange={(event) => {
+            setKeyword(event.target.value);
+            setDone(null);
+          }}
+          placeholder="关键词，如「XX大学 夏令营 报名」"
+          className="h-9 min-w-0 flex-1 rounded-lg border border-neutral-200 px-2.5 text-[13px] outline-none focus:border-neutral-400"
+        />
+        <button
+          type="submit"
+          disabled={createSource.isPending || !keyword.trim()}
+          className="flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg bg-neutral-900 px-3 text-[12.5px] text-white disabled:opacity-40"
+        >
+          {createSource.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+          添加源
+        </button>
+      </form>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {WECHAT_SUGGESTIONS.map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => setKeyword(item)}
+            className="rounded-full border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-500 hover:border-neutral-400 hover:text-neutral-700"
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
+      {done && <p className="mt-2 text-[11.5px] text-emerald-600">{done}</p>}
+      {visibleError(createSource.error) && (
+        <p className="mt-2 text-[12px] text-red-600">{visibleError(createSource.error)?.message}</p>
+      )}
+      <p className="mt-2 text-[11px] text-neutral-400">
+        注意：搜狗有频率限制，抓太勤会临时要求验证码；每次只取第一页，抓到的内容同样先进「待确认」。
+      </p>
+    </section>
+  );
+}
+
 /* ============================== 竞赛频道 ============================== */
 
 function CompetitionSection() {
@@ -259,6 +356,64 @@ function CompetitionSection() {
 
 /* ============================== 信息源（原有） ============================== */
 
+/**
+ * 手机端提示条：抓取（RSS / 列表页 / 公众号检索 / 剪藏抽取）都必须在电脑上的服务里跑，
+ * 手机本地只有 IndexedDB，做不了跨域抓取和解析。没配地址或连不上时把原因讲清，
+ * 否则整页卡片都点不动，用户只会觉得「这个功能不能用」。
+ */
+function HubHint({ unreachable }: { unreachable: boolean }) {
+  if (!isLocalFirst()) return null;
+  const base = getServerUrl();
+  // 没填地址 = 手机端根本不带服务端，请求会落到 WebView 的静态资源上，必然失败；
+  // 这种配置缺失要立刻提示，不能等请求超时。
+  if (base && !unreachable) return null;
+
+  const settingsHref = (() => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', 'settings');
+      return `${url.pathname}${url.search}`;
+    } catch {
+      return '?view=settings';
+    }
+  })();
+
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-3">
+      <div className="flex items-start gap-2">
+        <CloudOff className="mt-0.5 size-4 shrink-0 text-amber-600" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium text-amber-900">
+            {base ? '连不上电脑，抓取暂时无法进行' : '抓取需要在电脑上运行'}
+          </p>
+          <p className="mt-1 text-[12px] leading-relaxed text-amber-800/90">
+            {base ? (
+              <>
+                已配置地址 <code className="rounded bg-amber-100 px-1">{base}</code>，
+                但这次没连上。请确认电脑上双击过 <code className="rounded bg-amber-100 px-1">start-lan.bat</code>，
+                且手机和电脑连的是同一个 Wi-Fi。
+              </>
+            ) : (
+              <>
+                信息源抓取、公众号检索、剪藏识别都由电脑上的服务完成，手机端不会自己联网抓。
+                到「设置 → 服务端连接」填写电脑的局域网地址（如{' '}
+                <code className="rounded bg-amber-100 px-1">192.168.1.10</code>），
+                并在电脑上双击 <code className="rounded bg-amber-100 px-1">start-lan.bat</code> 即可。
+              </>
+            )}
+          </p>
+          <a
+            href={settingsHref}
+            className="mt-2 inline-flex h-8 items-center rounded-lg bg-amber-600 px-3 text-[12.5px] font-medium text-white"
+          >
+            去设置服务端地址
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SourcesView() {
   const sourcesQuery = useSources();
   const candidatesQuery = useCandidates('pending');
@@ -273,6 +428,9 @@ export function SourcesView() {
 
   const sources = sourcesQuery.data ?? [];
   const candidates = candidatesQuery.data ?? [];
+  // 手机端 sourcesQuery 失败（未配地址 → WebView 回落 index.html；或配了但连不上）
+  // 时整页功能都不可用，必须把原因讲出来，否则用户只会觉得「这个功能不能用」。
+  const unreachable = isLocalFirst() && sourcesQuery.isError;
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -290,7 +448,9 @@ export function SourcesView() {
 
   return (
     <div className="space-y-6">
+      <HubHint unreachable={unreachable} />
       <ClipCard />
+      <WechatCard />
       <CompetitionSection />
 
       <section>
@@ -321,7 +481,8 @@ export function SourcesView() {
             </button>
           </div>
           <p className="mt-2 text-[11.5px] text-neutral-400">
-            目前支持 RSS / Atom。添加后会按间隔自动抓取，采集到的内容先进「待确认」，不会直接变成任务。
+            支持 RSS / Atom、JSON 列表源，以及能直接打开的文章列表页（含 GBK 编码的国内站点）。
+            添加后会按间隔自动抓取，采集到的内容先进「待确认」，不会直接变成任务。
           </p>
           {visibleError(createSource.error) && (
             <p className="mt-2 text-[12px] text-red-600">{visibleError(createSource.error)?.message}</p>
@@ -331,7 +492,7 @@ export function SourcesView() {
         <div className="mt-3 space-y-1.5">
           {sources.length === 0 && !sourcesQuery.isLoading && (
             <p className="rounded-xl border border-dashed border-neutral-200 px-4 py-8 text-center text-[12.5px] text-neutral-400">
-              还没有信息源。加一个 RSS 地址，比如某个招聘站或公告页的订阅源。
+              还没有信息源。可以直接填一个 RSS 地址，或者用上面的「公众号关键词」按主题发现文章。
             </p>
           )}
 
@@ -343,7 +504,11 @@ export function SourcesView() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-medium text-neutral-800">{source.name}</p>
                 <p className="mt-0.5 flex items-center gap-2 text-[11.5px] text-neutral-400">
-                  <span className="truncate">{source.url}</span>
+                  <span className="truncate">
+                    {wechatKeywordOf(source.url)
+                      ? `公众号检索：${wechatKeywordOf(source.url)}`
+                      : source.url}
+                  </span>
                   <span>·</span>
                   <span className="shrink-0">{relativeTime(source.lastFetchedAt)}</span>
                 </p>

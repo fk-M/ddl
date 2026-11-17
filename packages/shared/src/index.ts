@@ -457,6 +457,54 @@ export const HabitStatsSchema = z.object({
 });
 export type HabitStats = z.infer<typeof HabitStatsSchema>;
 
+/** 公众号关键词 → 搜狗微信检索地址（服务端据此识别并解析，前端据此创建信息源） */
+export function wechatSearchUrl(keyword: string): string {
+  return `https://weixin.sogou.com/weixin?type=2&query=${encodeURIComponent(keyword.trim())}`;
+}
+
+/** 从搜狗微信检索地址里取回关键词，用于信息源列表展示 */
+export function wechatKeywordOf(url: string): string {
+  try {
+    return new URL(url).searchParams.get('query') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function fnv1a(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function hexChunk(value: number, length: number): string {
+  return (value >>> 0)
+    .toString(16)
+    .padStart(8, '0')
+    .slice(0, length);
+}
+
+/**
+ * 打卡记录 id 由「习惯 + 日期」确定：同一端重复打卡不会产生两行，
+ * 两端各自离线打卡也会算出同一个 id，同步时天然去重（服务端按 id upsert）。
+ * 采用 uuid v4 形状（version=4、variant=a）以通过 uuid 校验。
+ */
+export function habitLogId(habitId: string, date: string): string {
+  const seed = `${habitId}:${date}`;
+  const a = fnv1a(seed);
+  const b = fnv1a(`${seed}#ddl`);
+  return [
+    hexChunk(a, 8),
+    hexChunk(Math.imul(a, 2654435761), 4),
+    `4${hexChunk(b, 3)}`,
+    `a${hexChunk(b >>> 8, 3)}`,
+    `${hexChunk(a ^ b, 8)}${hexChunk(Math.imul(b, 2246822519), 4)}`,
+  ].join('-');
+}
+
 /* ============================== 专注 ============================== */
 
 export const FocusTypeSchema = z.enum(['focus', 'shortBreak', 'longBreak']);
@@ -776,6 +824,9 @@ export type SyncSnapshot = {
   lists: SyncRow[];
   tags: SyncRow[];
   tasks: SyncRow[];
+  habits: SyncRow[];
+  habitLogs: SyncRow[];
+  anniversaries: SyncRow[];
 };
 
 /** 客户端只推送本地产生变更的记录，服务端逐条做 LWW 判定 */
@@ -784,6 +835,9 @@ export const SyncPushSchema = z.object({
   lists: z.array(z.record(z.unknown())).default([]),
   tags: z.array(z.record(z.unknown())).default([]),
   tasks: z.array(z.record(z.unknown())).default([]),
+  habits: z.array(z.record(z.unknown())).default([]),
+  habitLogs: z.array(z.record(z.unknown())).default([]),
+  anniversaries: z.array(z.record(z.unknown())).default([]),
   /** 客户端彻底删除（清空垃圾桶 / 删清单）的 id，服务端物理删除以免下一轮 pull 复活 */
   purgedIds: z.array(z.string().uuid()).default([]),
 });
@@ -791,5 +845,13 @@ export type SyncPushInput = z.output<typeof SyncPushSchema>;
 
 export type SyncPushResult = {
   serverTime: string;
-  applied: { listGroups: number; lists: number; tags: number; tasks: number };
+  applied: {
+    listGroups: number;
+    lists: number;
+    tags: number;
+    tasks: number;
+    habits: number;
+    habitLogs: number;
+    anniversaries: number;
+  };
 };
