@@ -1,0 +1,26 @@
+{
+  "name": "截止日 · DDL",
+  "short_name": "截止日",
+  "description": "把散落在微信、雨课堂、班级群里的截止日期收进一个清单，到点提醒。",
+  "lang": "zh-CN",
+  "start_url": "/?localfirst=1",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f6f4",
+  "theme_color": "#f6f6f4",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

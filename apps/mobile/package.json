@@ -1,7 +1,7 @@
 {
   "name": "@ddl/mobile",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "截止日 - Android 客户端（Capacitor 外壳，连接局域网内电脑的服务端）",
   "scripts": {
     "prepare:web": "npm run build -w @ddl/web",
@@ -13,6 +13,7 @@
     "@capacitor/android": "^6.2.0",
     "@capacitor/core": "^6.2.0",
     "@capacitor/filesystem": "^6.0.4",
+    "@capacitor/ios": "^6.2.3",
     "@capacitor/share": "^6.0.4"
   },
   "devDependencies": {

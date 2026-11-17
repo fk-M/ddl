@@ -100,10 +100,17 @@ export async function buildApp(): Promise<FastifyInstance> {
       setHeaders: (reply, filePath) => {
         // 所有 HTML 页面（index.html、diagnostics.html 等）都必须每次回源，
         // 否则改了检测页手机端还拿到旧版本；只有带 hash 的静态资源才长缓存。
-        const isHtml = filePath.toLowerCase().endsWith('.html');
+        const lower = filePath.toLowerCase().replace(/\\/g, '/');
+        const isHtml = lower.endsWith('.html');
+        // Service Worker 被缓存住就没法推新版（浏览器最多隔 24h 才检查一次），
+        // 清单文件和图标同理，一律 no-cache。
+        const isShell =
+          lower.endsWith('/sw.js') ||
+          lower.endsWith('.webmanifest') ||
+          lower.endsWith('/manifest.json');
         reply.header(
           'Cache-Control',
-          isHtml ? 'no-cache, must-revalidate' : 'public, max-age=604800, immutable',
+          isHtml || isShell ? 'no-cache, must-revalidate' : 'public, max-age=604800, immutable',
         );
       },
     });

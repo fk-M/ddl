@@ -4,4 +4,6 @@
     <string name="title_activity_main">截止日</string>
     <string name="package_name">com.ddl.app</string>
     <string name="custom_url_scheme">com.ddl.app</string>
+    <string name="widget_description">今日待办与最近纪念日</string>
+    <string name="widget_label">截止日 · 今天</string>
 </resources>

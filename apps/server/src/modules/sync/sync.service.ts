@@ -319,7 +319,10 @@ export function createSyncService(db: Db) {
     const knownHabits = new Set((await db.select({ id: habits.id }).from(habits)).map((row) => row.id));
     let applied = 0;
     for (const raw of rows) {
-      if (!validRow(raw)) continue;
+      // habit_logs 表没有 updated_at，不能用通用 validRow（它要求 raw.updatedAt）。
+      // 客户端会用 createdAt 兼作 LWW 时钟，这里只要求有 id + 任一可用时间。
+      const hasClock = iso(raw.createdAt) !== null || iso(raw.updatedAt) !== null;
+      if (typeof raw.id !== 'string' || !raw.id || !hasClock) continue;
       const row = toHabitLogRow(raw);
       if (!row.habitId || !row.logDate || !knownHabits.has(row.habitId)) continue;
       try {
@@ -334,8 +337,10 @@ export function createSyncService(db: Db) {
             ),
           );
         applied += 1;
-      } catch {
-        // 习惯尚未同步过来时会命中外键，跳过等下一轮
+      } catch (error) {
+        // 习惯尚未同步过来时会命中外键，跳过等下一轮；其它错误也要留痕，
+        // 静默吞掉会让「手机上打了卡、电脑上看不到」变成无从排查的幽灵 bug。
+        console.warn('[sync] habit log 写入失败，已跳过：', (error as Error)?.message, row.id);
       }
     }
     return applied;

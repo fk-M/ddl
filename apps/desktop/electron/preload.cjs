@@ -15,3 +15,13 @@ contextBridge.exposeInMainWorld('ddlDesktop', {
     });
   },
 });
+
+// 桌面小部件（独立无边框窗口）的控制接口；主窗口和窗口本身都用这一份
+contextBridge.exposeInMainWorld('widget', {
+  open: () => ipcRenderer.invoke('ddl:widget:open'),
+  close: () => ipcRenderer.invoke('ddl:widget:close'),
+  isOpen: () => ipcRenderer.invoke('ddl:widget:is-open'),
+  focusMain: () => ipcRenderer.invoke('ddl:widget:focus-main'),
+  setPinned: (pinned) => ipcRenderer.invoke('ddl:widget:set-pinned', pinned),
+  getPinned: () => ipcRenderer.invoke('ddl:widget:get-pinned'),
+});

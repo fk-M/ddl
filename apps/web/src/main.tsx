@@ -2,6 +2,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { WidgetApp } from './components/WidgetApp';
+import { WidgetSync } from './components/WidgetSync';
+import { isNativeWidget } from './lib/widget';
 import { startSyncEngine, SYNC_DATA_EVENT } from './lib/sync-engine';
 import './index.css';
 
@@ -37,13 +40,28 @@ window.addEventListener(SYNC_DATA_EVENT, () => {
 const isDiagnosticsProbe = new URLSearchParams(window.location.search).get('diag') === '1';
 if (!isDiagnosticsProbe) startSyncEngine();
 
+// 桌面小部件是同一份前端资源里的另一屏（Electron 用独立无边框窗口加载 ?widget=1），
+// 共用 QueryClient 缓存，不额外增加打包体积。
+const isWidget = new URLSearchParams(window.location.search).get('widget') === '1';
+if (isWidget) document.documentElement.dataset.surface = 'widget';
+
+// PWA 离线壳：只在生产构建里注册，避免 dev 的 HMR 被缓存住。
+// 小部件窗口和检测用的 iframe 都不注册，省一次安装。
+if (import.meta.env.PROD && !isWidget && !isDiagnosticsProbe && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+  });
+}
+
 const container = document.getElementById('root');
 if (!container) throw new Error('挂载节点 #root 不存在');
 
 createRoot(container).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      {isWidget ? <WidgetApp /> : <App />}
+      {/* 手机端的桌面小组件靠它把快照推给原生；桌面/浏览器里 isNativeWidget() 为 false，不挂 */}
+      {!isWidget && isNativeWidget() && <WidgetSync />}
     </QueryClientProvider>
   </StrictMode>,
 );

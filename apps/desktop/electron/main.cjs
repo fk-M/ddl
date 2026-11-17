@@ -29,7 +29,41 @@ const resourcesRoot = isDev
 
 let serverProcess = null;
 let mainWindow = null;
+let widgetWindow = null;
+let serverPort = 0;
 let logStream = null;
+
+/* ============================ 桌面小部件状态 ============================ */
+
+/**
+ * 小部件的置顶状态和窗口位置要跨启动记住，存在 userData 下的一个小 JSON 里。
+ * 单独存而不塞进数据库：它属于「这台机器的窗口偏好」，不该跟着同步跑到手机上。
+ */
+const widgetStatePath = () => path.join(app.getPath('userData'), 'widget-window.json');
+
+function readWidgetState() {
+  try {
+    const raw = fs.readFileSync(widgetStatePath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      pinned: Boolean(parsed?.pinned),
+      x: Number.isFinite(parsed?.x) ? parsed.x : undefined,
+      y: Number.isFinite(parsed?.y) ? parsed.y : undefined,
+    };
+  } catch {
+    return { pinned: false, x: undefined, y: undefined };
+  }
+}
+
+function writeWidgetState(patch) {
+  const next = { ...readWidgetState(), ...patch };
+  try {
+    fs.writeFileSync(widgetStatePath(), JSON.stringify(next));
+  } catch (error) {
+    writeLog(`[widget] 状态保存失败：${error?.message ?? error}\n`);
+  }
+  return next;
+}
 
 function writeLog(chunk) {
   if (logStream) logStream.write(chunk);
@@ -145,6 +179,9 @@ function createWindow(port) {
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // 主窗口关掉就整体退出：留着孤立的小部件会让人找不到入口，
+    // 而且内嵌服务一停它也没数据可显示。
+    closeWidgetWindow();
   });
 
   // 站外链接交给系统浏览器，不在应用内开新窗口
@@ -164,6 +201,115 @@ function createWindow(port) {
   mainWindow.loadURL(url).catch((error) => {
     writeLog(`[app] 页面载入失败：${error}\n`);
   });
+}
+
+/**
+ * 桌面小部件：无边框透明窗口，加载同一份前端的 ?widget=1 屏。
+ * 不占任务栏、可拖动、默认不置顶（用户点了图钉才置顶）。
+ */
+function createWidgetWindow() {
+  if (widgetWindow && !widgetWindow.isDestroyed()) {
+    widgetWindow.show();
+    widgetWindow.focus();
+    return widgetWindow;
+  }
+  if (!serverPort) return null;
+
+  const state = readWidgetState();
+  widgetWindow = new BrowserWindow({
+    width: 320,
+    height: 400,
+    minWidth: 260,
+    minHeight: 220,
+    x: state.x,
+    y: state.y,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: state.pinned,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  if (state.pinned) widgetWindow.setAlwaysOnTop(true, 'floating');
+  widgetWindow.setMenuBarVisibility(false);
+
+  widgetWindow.once('ready-to-show', () => widgetWindow.show());
+
+  const rememberBounds = () => {
+    if (!widgetWindow || widgetWindow.isDestroyed()) return;
+    const [x, y] = widgetWindow.getPosition();
+    writeWidgetState({ x, y });
+  };
+  widgetWindow.on('moved', rememberBounds);
+  widgetWindow.on('closed', () => {
+    widgetWindow = null;
+  });
+
+  widgetWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  widgetWindow.loadURL(`http://127.0.0.1:${serverPort}/?widget=1`).catch((error) => {
+    writeLog(`[widget] 页面载入失败：${error}\n`);
+  });
+  writeLog('[widget] 小部件窗口已创建\n');
+  return widgetWindow;
+}
+
+function closeWidgetWindow() {
+  if (widgetWindow && !widgetWindow.isDestroyed()) {
+    widgetWindow.destroy();
+  }
+  widgetWindow = null;
+}
+
+/** 渲染进程（设置页）控制小部件的入口 */
+function setupWidgetIpc() {
+  ipcMain.handle('ddl:widget:is-open', () =>
+    Boolean(widgetWindow && !widgetWindow.isDestroyed()),
+  );
+
+  ipcMain.handle('ddl:widget:open', () => {
+    const win = createWidgetWindow();
+    return Boolean(win);
+  });
+
+  ipcMain.handle('ddl:widget:close', () => {
+    closeWidgetWindow();
+    return true;
+  });
+
+  ipcMain.handle('ddl:widget:focus-main', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return true;
+  });
+
+  ipcMain.handle('ddl:widget:set-pinned', (_event, pinned) => {
+    const next = Boolean(pinned);
+    if (widgetWindow && !widgetWindow.isDestroyed()) {
+      widgetWindow.setAlwaysOnTop(next, next ? 'floating' : 'normal');
+    }
+    writeWidgetState({ pinned: next });
+    return next;
+  });
+
+  ipcMain.handle('ddl:widget:get-pinned', () => readWidgetState().pinned);
 }
 
 /** 更新状态推给渲染进程（进度、完成、错误） */
@@ -231,7 +377,15 @@ function buildMenu() {
   const template = [
     {
       label: '文件',
-      submenu: [{ role: 'quit', label: '退出' }],
+      submenu: [
+        {
+          label: '打开桌面小部件',
+          accelerator: 'CmdOrCtrl+Shift+D',
+          click: () => createWidgetWindow(),
+        },
+        { type: 'separator' },
+        { role: 'quit', label: '退出' },
+      ],
     },
     {
       label: '视图',
@@ -290,6 +444,7 @@ if (!gotLock) {
     app.setAppUserModelId('com.ddl.desktop');
     buildMenu();
     setupUpdaterIpc();
+    setupWidgetIpc();
 
     const logPath = path.join(app.getPath('userData'), 'desktop.log');
     logStream = fs.createWriteStream(logPath, { flags: 'a' });
@@ -297,6 +452,7 @@ if (!gotLock) {
 
     try {
       const port = await startServer();
+      serverPort = port;
       createWindow(port);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

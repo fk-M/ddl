@@ -6,6 +6,7 @@ import {
   Database,
   Download,
   Info,
+  LayoutGrid,
   Link2,
   ListChecks,
   Palette,
@@ -31,6 +32,7 @@ import { NavOrderCard } from './NavOrderCard';
 import { NotifyCard } from './NotifyCard';
 import { Button, Card, ErrorBar, Field, SectionTitle, Toggle, inputClass, selectClass } from './ui';
 import { UpdateCard } from './UpdateCard';
+import { WidgetCard } from './WidgetCard';
 
 type Props = {
   settings: AppSettings;
@@ -41,6 +43,7 @@ type Props = {
 const SECTIONS = [
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'reminder', label: '提醒与专注', icon: Bell },
+  { key: 'widget', label: '桌面小组件', icon: LayoutGrid },
   { key: 'task', label: '任务与视图', icon: ListChecks },
   { key: 'calendar', label: '日历', icon: CalendarDays },
   { key: 'data', label: '数据与同步', icon: Database },
@@ -610,6 +613,8 @@ export function SettingsView({ settings, lists }: Props) {
             </div>
           </Card>
         )}
+
+        {active === 'widget' && <WidgetCard />}
 
         {active === 'data' && (
           <>

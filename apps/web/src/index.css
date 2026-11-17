@@ -44,6 +44,15 @@ body {
   text-size-adjust: 100%;
 }
 
+/*
+ * 桌面小部件是无边框透明窗口（Electron 的 ?widget=1），
+ * 全局 canvas 底色会把圆角外面的部分涂成实心方块，这里必须让出去。
+ */
+html[data-surface='widget'],
+html[data-surface='widget'] body {
+  background: transparent;
+}
+
 * {
   box-sizing: border-box;
 }

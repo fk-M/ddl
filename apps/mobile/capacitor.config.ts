@@ -12,6 +12,9 @@ const config: CapacitorConfig = {
   server: {
     // 用 http://localhost 作为 WebView 源，避免 https 页面请求内网 http 被拦截
     androidScheme: 'http',
+    // iOS 默认是 capacitor://localhost，跨源请求内网服务会被 ATS 拦，
+    // 这里跟 Android 统一成 http://localhost
+    iosScheme: 'http',
     cleartext: true,
   },
 };
