@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { connect } from 'node:net';
-import { networkInterfaces } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +33,24 @@ function lanAddresses() {
     }
   }
   return result;
+}
+
+/**
+ * 桌面 App 的数据库目录（Electron 的 userData/data/pglite）。
+ * 只有那里已经建过库才返回，否则返回空串，让服务端用默认目录 —— 免得新机器上一开始就指向空目录。
+ */
+function sharedPgliteDir() {
+  if (process.env.PGLITE_DIR) return process.env.PGLITE_DIR;
+  let base;
+  if (process.platform === 'win32') {
+    base = path.join(process.env.APPDATA ?? path.join(homedir(), 'AppData', 'Roaming'), 'DDL', 'data');
+  } else if (process.platform === 'darwin') {
+    base = path.join(homedir(), 'Library', 'Application Support', 'DDL', 'data');
+  } else {
+    base = path.join(process.env.XDG_CONFIG_HOME ?? path.join(homedir(), '.config'), 'DDL', 'data');
+  }
+  const dir = path.join(base, 'pglite');
+  return existsSync(path.join(dir, 'PG_VERSION')) ? dir : '';
 }
 
 /** 纯 TCP 探测端口占用，比 /health 更准（旧服务若是别的程序也能发现） */
@@ -183,6 +201,7 @@ if (!(await waitPortFree())) {
 
 const webServed = existsSync(path.join(webDist, 'index.html'));
 const addresses = lanAddresses();
+const sharedPglite = sharedPgliteDir();
 
 const child = spawn(
   process.execPath,
@@ -198,6 +217,10 @@ const child = spawn(
       HOST: '0.0.0.0',
       PORT: port,
       CORS_ORIGINS: '*',
+      // 和桌面 App 共用同一份数据库。以前这里用的是 apps/server/data/pglite，
+      // 结果「桌面 App 里记的任务」和「手机同步到的任务」是两份互不相通的数据。
+      // 注意：PGlite 是单进程独占的，跑这个脚本前必须先完全退出桌面 App。
+      ...(sharedPglite && { PGLITE_DIR: sharedPglite }),
       // 同时托管前端：手机浏览器打开根路径即可直接用完整界面，也便于先验证网络再装 APK
       ...(webServed ? { WEB_DIST: webDist } : {}),
     },

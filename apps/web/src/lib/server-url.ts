@@ -72,6 +72,21 @@ export function isNativeApp(): boolean {
 }
 
 /**
+ * 需要「本机库 + 跟电脑同步」的运行环境：真机 App，或 `?localfirst=1` 预览。
+ *
+ * 桌面 Electron 不算：它自带内嵌服务与数据库，本来就没有「另一个电脑」可同步，
+ * 让它跑同步引擎只会自己连自己，界面上还会显示一句误导的「已连上电脑」。
+ */
+export function isSyncClient(): boolean {
+  if (isNativeApp()) return true;
+  try {
+    return new URLSearchParams(window.location.search).get('localfirst') === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 信息源 / 候选池只在手机上落本机，桌面端与网页版继续用服务端的采集链路。
  *
  * 原因：服务端有后台轮询（COLLECT_TICK_SECONDS）在采集，候选池是「服务端产出、

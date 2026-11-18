@@ -1,7 +1,7 @@
 {
   "name": "@ddl/desktop",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "productName": "DDL",
   "description": "截止日 - Windows 桌面端（Electron 外壳，内嵌本地服务与数据库）",
   "main": "electron/main.cjs",

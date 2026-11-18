@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('ddlDesktop', {
       }
     });
   },
+  // 手机连接相关：内嵌服务监听了哪个地址、要不要重启才生效
+  serverInfo: () => ipcRenderer.invoke('ddl:server:info'),
+  getPrefs: () => ipcRenderer.invoke('ddl:prefs:get'),
+  setPrefs: (patch) => ipcRenderer.invoke('ddl:prefs:set', patch),
 });
 
 // 桌面小部件（独立无边框窗口）的控制接口；主窗口和窗口本身都用这一份。

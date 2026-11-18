@@ -24,12 +24,13 @@ import {
   normalizeServerUrl,
   setServerUrl,
 } from '../lib/api';
-import { isLocalFirst } from '../lib/server-url';
+import { isLocalFirst, isSyncClient } from '../lib/server-url';
 import { getSyncStatus, subscribeSync, syncNow, type SyncStatus } from '../lib/sync-engine';
 import { COMPLETION_SOUNDS, NOISE_KINDS, REMIND_SOUNDS, playCompletionSound, playRemindSound, type NoiseKind } from '../lib/sound';
 import { ACCENT_PRESETS, ICON_PACKS } from '../lib/theme';
 import { NavOrderCard } from './NavOrderCard';
 import { NotifyCard } from './NotifyCard';
+import { PhoneAccessCard } from './PhoneAccessCard';
 import { Button, Card, ErrorBar, Field, SectionTitle, Toggle, inputClass, selectClass } from './ui';
 import { UpdateCard } from './UpdateCard';
 import { WidgetCard } from './WidgetCard';
@@ -556,7 +557,7 @@ export function SettingsView({ settings, lists }: Props) {
         {active === 'calendar' && (
             <Card id="settings-calendar">
               <SectionTitle>日历订阅（.ics）</SectionTitle>
-              {isLocalFirst() && (
+              {isSyncClient() && (
                 <p className="mb-3 rounded-lg bg-neutral-50 px-3 py-2 text-[11.5px] leading-relaxed text-neutral-500">
                   订阅的拉取与解析都在电脑端服务里完成。手机要先和电脑连同一网络、并在「服务端连接」里填好地址，
                   才能添加订阅；已有日程会随同步一起下来。
@@ -643,7 +644,7 @@ export function SettingsView({ settings, lists }: Props) {
             <Card id="settings-data">
               <SectionTitle>数据</SectionTitle>
               <div className="flex flex-wrap gap-2">
-                {isLocalFirst() ? (
+                {isSyncClient() ? (
                   <Button onClick={doExportJson} disabled={exporting}>
                     <Download className="size-3.5" />
                     {exporting ? '生成中…' : '导出 JSON 备份'}
@@ -670,7 +671,7 @@ export function SettingsView({ settings, lists }: Props) {
                   清空垃圾桶
                 </Button>
               </div>
-              {isLocalFirst() && (
+              {isSyncClient() && (
                 <p className="mt-2 text-[11.5px] leading-relaxed text-neutral-400">
                   手机端导出的是完整 JSON 备份（含清单、任务、标签与设置），可直接在电脑端导入；
                   CSV / ICS 需要在电脑端导出。{exportMessage && ` ${exportMessage}`}
@@ -679,7 +680,7 @@ export function SettingsView({ settings, lists }: Props) {
 
               <div className="mt-4 rounded-lg border border-neutral-200/80 p-3">
                 <p className="mb-2 text-[12px] font-medium text-neutral-700">导入</p>
-                {isLocalFirst() ? (
+                {isSyncClient() ? (
                   <p className="text-[12px] leading-relaxed text-neutral-500">
                     手机端暂不支持导入（解析与落库都在电脑端服务里）。
                     请把备份文件拿到电脑上，用「设置 → 数据 → 导入」恢复。
@@ -741,11 +742,20 @@ export function SettingsView({ settings, lists }: Props) {
 
             {isLocalFirst() && (
               <Card id="settings-sync">
-                <SectionTitle>离线使用与同步</SectionTitle>
+                <SectionTitle>{isSyncClient() ? '离线使用与同步' : '本机数据同步'}</SectionTitle>
                 <p className="mb-3 text-[12px] leading-relaxed text-neutral-500">
-                  手机上的任务、清单和标签保存在本机，不连电脑也能新建、编辑、完成和删除。
-                  只有手机与电脑在同一网络、且电脑端服务可达时才会自动双向同步；
-                  两端都改过同一条任务时，以修改时间更晚的一方为准。
+                  {isSyncClient() ? (
+                    <>
+                      手机上的任务、清单和标签保存在本机，不连电脑也能新建、编辑、完成和删除。
+                      只有手机与电脑在同一网络、且电脑端服务可达时才会自动双向同步；
+                      两端都改过同一条任务时，以修改时间更晚的一方为准。
+                    </>
+                  ) : (
+                    <>
+                      界面上看到的数据来自本机缓存，由桌面端后台服务（PGlite）自动对齐。
+                      正常使用不需要手动干预；如果这里长时间显示未连上，说明后台服务没有启动。
+                    </>
+                  )}
                 </p>
                 <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
@@ -760,7 +770,15 @@ export function SettingsView({ settings, lists }: Props) {
                               : 'bg-amber-500',
                         )}
                       />
-                      {sync.state === 'syncing' ? '同步中…' : sync.reach ? '已连上电脑' : '离线使用'}
+                      {sync.state === 'syncing'
+                        ? '同步中…'
+                        : sync.reach
+                          ? isSyncClient()
+                            ? '已连上电脑'
+                            : '已与本地数据库对齐'
+                          : isSyncClient()
+                            ? '离线使用'
+                            : '未连上本地服务'}
                     </span>
                     <button
                       type="button"
@@ -779,6 +797,8 @@ export function SettingsView({ settings, lists }: Props) {
                 </div>
               </Card>
             )}
+
+            <PhoneAccessCard />
 
             <Card id="settings-server">
               <SectionTitle>服务端连接</SectionTitle>
@@ -878,7 +898,7 @@ export function SettingsView({ settings, lists }: Props) {
             <Card id="settings-about">
               <SectionTitle>关于</SectionTitle>
               <p className="text-[12px] leading-relaxed text-neutral-500">
-                {isLocalFirst()
+                {isSyncClient()
                   ? '手机端核心数据存在本机 IndexedDB，离线完整可用；主题、提醒、导航顺序等设置也保存在本机。习惯、专注、纪念日、信息源与附件需联网时可用。'
                   : '数据保存在本机 PGlite 数据库，附件存于 apps/server/data/attachments。'}
                 团队协作、第三方日历 OAuth、微信/邮件推送需要云账号，暂未接入；.ics 订阅已可替代日历只读同步。

@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
+const os = require('node:os');
 const { fork } = require('node:child_process');
 
 const isDev = !app.isPackaged;
@@ -30,6 +31,8 @@ const resourcesRoot = isDev
 let serverProcess = null;
 let mainWindow = null;
 let serverPort = 0;
+/** '0.0.0.0' 表示已允许手机连入，'127.0.0.1' 表示只在本机 */
+let serverHost = '127.0.0.1';
 let logStream = null;
 
 /**
@@ -109,15 +112,99 @@ function writeLog(chunk) {
   if (logStream) logStream.write(chunk);
 }
 
+/* ============================ 桌面偏好（手机连接） ============================ */
+
+/**
+ * 桌面端偏好存成单独的 JSON，而不是放进 PGlite：主进程要在启动服务之前
+ * 就知道「要不要监听 0.0.0.0」，这时数据库还没打开。
+ */
+const DEFAULT_PREFS = {
+  /** 允许手机 / 平板通过局域网连进来。关掉则只监听 127.0.0.1 */
+  lanAccess: true,
+  /** 优先用 3001，这样手机端地址不用记随机端口；被占用时自动退回随机端口 */
+  preferredPort: 3001,
+};
+
+function prefsFile() {
+  return path.join(app.getPath('userData'), 'desktop-prefs.json');
+}
+
+function readPrefs() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(prefsFile(), 'utf8'));
+    return { ...DEFAULT_PREFS, ...raw };
+  } catch {
+    return { ...DEFAULT_PREFS };
+  }
+}
+
+function writePrefs(patch) {
+  const next = { ...readPrefs(), ...patch };
+  try {
+    fs.mkdirSync(path.dirname(prefsFile()), { recursive: true });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    writeLog(`[prefs] 写入失败：${error?.message ?? error}\n`);
+  }
+  return next;
+}
+
+/**
+ * 虚拟网卡不可能是手机能连的地址（VMware / VirtualBox / Hyper-V / Docker），
+ * 列出来只会让用户填错。但如果过滤完一个都不剩（有人确实只有虚拟网卡），
+ * 就退回显示全部，免得界面上写「没有可用地址」。
+ */
+const VIRTUAL_NIC = /vmware|virtualbox|vethernet|hyper-?v|docker|loopback|npcap/i;
+
+/** 所有可给手机用的局域网地址；Tailscale 网卡单独标出来，方便直接抄 */
+function lanAddresses() {
+  const all = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const info of list ?? []) {
+      if (info.family !== 'IPv4' || info.internal) continue;
+      // 169.254.x.x 是没拿到 DHCP 时的自动地址，手机不可能连上
+      if (info.address.startsWith('169.254.')) continue;
+      all.push({
+        name,
+        address: info.address,
+        kind: /tailscale/i.test(name) ? 'tailscale' : 'lan',
+      });
+    }
+  }
+  const physical = all.filter((item) => !VIRTUAL_NIC.test(item.name));
+  // Tailscale 放在最前面：出门在外只有这一条能用
+  return (physical.length > 0 ? physical : all).sort((a, b) =>
+    a.kind === b.kind ? 0 : a.kind === 'tailscale' ? -1 : 1,
+  );
+}
+
 /** 申请一个由系统分配的空闲端口，避免和其它软件抢 3001 */
-function getFreePort() {
+function getFreePort(host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.unref();
     srv.on('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
+    srv.listen(0, host, () => {
       const { port } = srv.address();
       srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** 指定端口空闲就用它，否则交给系统挑 */
+function pickPort(preferred, host) {
+  return new Promise((resolve) => {
+    if (!preferred) {
+      void getFreePort(host).then(resolve);
+      return;
+    }
+    const srv = net.createServer();
+    srv.unref();
+    srv.once('error', () => {
+      void getFreePort(host).then(resolve);
+    });
+    srv.listen(preferred, host, () => {
+      srv.close(() => resolve(preferred));
     });
   });
 }
@@ -155,7 +242,10 @@ async function startServer() {
     throw new Error(`缺少服务端文件：${serverEntry}`);
   }
 
-  const port = await getFreePort();
+  const prefs = readPrefs();
+  const host = prefs.lanAccess ? '0.0.0.0' : '127.0.0.1';
+  const port = await pickPort(prefs.preferredPort, host);
+  serverHost = host;
   const dataRoot = path.join(app.getPath('userData'), 'data');
   fs.mkdirSync(dataRoot, { recursive: true });
 
@@ -163,13 +253,21 @@ async function startServer() {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
     NODE_ENV: 'production',
-    HOST: '127.0.0.1',
+    HOST: host,
     PORT: String(port),
     LOG_LEVEL: 'warn',
     PGLITE_DIR: path.join(dataRoot, 'pglite'),
     WEB_DIST: path.join(resourcesRoot, 'renderer'),
     MIGRATION_DIR: path.join(resourcesRoot, 'server', 'drizzle'),
-    CORS_ORIGINS: `http://127.0.0.1:${port}`,
+    // 手机 APK 的 WebView 源是 http://localhost，跨源访问这里时必须放行，
+    // 否则手机上只会看到笼统的「无法连接」。
+    CORS_ORIGINS: [
+      `http://127.0.0.1:${port}`,
+      `http://localhost:${port}`,
+      'http://localhost',
+      'https://localhost',
+      'capacitor://localhost',
+    ].join(','),
     AUTO_MIGRATE: 'true',
     // 采集轮询在桌面端保持默认；设为 0 可关掉
   };
@@ -193,6 +291,12 @@ async function startServer() {
   const ok = await waitForServer(port, 90_000);
   if (!ok) {
     throw new Error('本地服务启动超时，请查看日志文件了解详情');
+  }
+  writeLog(`[server] 监听 ${host}:${port}\n`);
+  if (host === '0.0.0.0') {
+    for (const item of lanAddresses()) {
+      writeLog(`[server] 手机可连接：http://${item.address}:${port}  (${item.name})\n`);
+    }
   }
   return port;
 }
@@ -383,6 +487,33 @@ function listWidgetWindows() {
 }
 
 /** 渲染进程（设置页与窗口自身）控制小部件的入口 */
+function setupServerIpc() {
+  ipcMain.handle('ddl:server:info', () => {
+    const prefs = readPrefs();
+    const lanEnabled = serverHost === '0.0.0.0';
+    return {
+      port: serverPort,
+      host: serverHost,
+      lanEnabled,
+      // 只在本机监听时，列出来的地址手机也用不上，直接给空数组避免误导
+      addresses: lanEnabled
+        ? lanAddresses().map((item) => ({ ...item, url: `http://${item.address}:${serverPort}` }))
+        : [],
+    };
+  });
+
+  ipcMain.handle('ddl:prefs:get', () => readPrefs());
+
+  ipcMain.handle('ddl:prefs:set', (_event, patch) => {
+    const before = readPrefs();
+    const next = writePrefs(patch ?? {});
+    const needRestart =
+      Boolean(before.lanAccess) !== Boolean(next.lanAccess) ||
+      Number(before.preferredPort) !== Number(next.preferredPort);
+    return { ok: true, prefs: next, needRestart };
+  });
+}
+
 function setupWidgetIpc() {
   ipcMain.handle('ddl:widget:list', () => listWidgetWindows());
 
@@ -586,6 +717,7 @@ if (!gotLock) {
     buildMenu();
     setupUpdaterIpc();
     setupWidgetIpc();
+    setupServerIpc();
 
     const logPath = path.join(app.getPath('userData'), 'desktop.log');
     logStream = fs.createWriteStream(logPath, { flags: 'a' });
