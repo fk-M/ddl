@@ -1,7 +1,7 @@
 {
   "name": "@ddl/mobile",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "截止日 - Android 客户端（Capacitor 外壳，连接局域网内电脑的服务端）",
   "scripts": {
     "prepare:web": "npm run build -w @ddl/web",

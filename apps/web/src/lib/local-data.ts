@@ -409,7 +409,9 @@ export async function localTasks(query: Partial<TaskQuery>): Promise<Task[]> {
     );
   }
 
-  const sort = query.sort ?? 'manual';
+  // 默认按截止时间升序：今天 16 点的任务排在 17 点前面。
+  // 之前默认是 'manual'（按 sortOrder），界面上看起来就是「创建顺序」，跟时间无关。
+  const sort = query.sort ?? 'dueAt';
   const direction = query.order === 'asc' ? 1 : -1;
   const sortKey = (row: LocalRow): string | number => {
     switch (sort) {
@@ -436,6 +438,23 @@ export async function localTasks(query: Partial<TaskQuery>): Promise<Task[]> {
     const doneA = a.status === 'completed' ? 1 : 0;
     const doneB = b.status === 'completed' ? 1 : 0;
     if (doneA !== doneB) return doneA - doneB;
+
+    // 截止时间固定升序，不受 order 影响（与服务端 buildOrder 的 dueAt 分支保持一致）：
+    // 有具体时间的在前并按时间递增；没有截止时间的排最后。
+    // 同一时刻再按 sortOrder、createdAt，保证每次都排出同一个顺序。
+    if (sort === 'dueAt') {
+      const dueA = str(a.dueAt);
+      const dueB = str(b.dueAt);
+      if (Boolean(dueA) !== Boolean(dueB)) return dueA ? -1 : 1;
+      if (dueA && dueB) {
+        const byDue = dueA.localeCompare(dueB);
+        if (byDue !== 0) return byDue;
+      }
+      const byOrder = num(a.sortOrder) - num(b.sortOrder);
+      if (byOrder !== 0) return byOrder;
+      return str(a.createdAt).localeCompare(str(b.createdAt));
+    }
+
     const ka = sortKey(a);
     const kb = sortKey(b);
     const cmp = typeof ka === 'number' && typeof kb === 'number'
